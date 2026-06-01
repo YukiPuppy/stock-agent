@@ -1,0 +1,13 @@
+.env
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+data/*.duckdb
+data/raw/
+data/processed/
+.DS_Store
+.vscode/
+.pytest_cache/
+.reports_cache/
