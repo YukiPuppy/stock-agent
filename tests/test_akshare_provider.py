@@ -1,4 +1,5 @@
 import os
+from contextlib import contextmanager
 
 import pandas as pd
 import pytest
@@ -103,7 +104,7 @@ def test_get_daily_bars_converts_fields(monkeypatch):
             "low": 9.9,
             "close": 10.3,
             "volume": 1000,
-            "amount": 100000.5,
+            "amount": 100.0005,
         },
         {
             "trade_date": "2024-01-03",
@@ -113,7 +114,7 @@ def test_get_daily_bars_converts_fields(monkeypatch):
             "low": 10.0,
             "close": 10.6,
             "volume": 1200,
-            "amount": 130000.0,
+            "amount": 130.0,
         },
     ]
 
@@ -204,9 +205,34 @@ def test_get_daily_bars_falls_back_to_stock_zh_a_daily(monkeypatch):
             "low": 9.9,
             "close": 10.3,
             "volume": 1000,
-            "amount": 100000.5,
+            "amount": 100.0005,
         }
     ]
+
+
+def test_get_daily_bars_keeps_akshare_volume_and_converts_amount_to_standard_units(monkeypatch):
+    def fake_stock_zh_a_hist(symbol, period, start_date, end_date, adjust):
+        return pd.DataFrame(
+            {
+                "日期": ["2024-01-02"],
+                "开盘": [10.1],
+                "最高": [10.5],
+                "最低": [9.9],
+                "收盘": [10.3],
+                "成交量": [181596.99],
+                "成交额": [210292078],
+            }
+        )
+
+    monkeypatch.setattr(
+        "src.data_providers.akshare_provider.ak.stock_zh_a_hist",
+        fake_stock_zh_a_hist,
+    )
+
+    result = AkshareProvider().get_daily_bars("600000", "2024-01-01", "2024-01-31")
+
+    assert result.loc[0, "volume"] == 181596.99
+    assert result.loc[0, "amount"] == 210292.078
 
 
 def test_get_daily_bars_raises_runtime_error_when_both_interfaces_fail(monkeypatch):
@@ -323,6 +349,7 @@ def test_get_daily_bars_normalizes_supported_code_formats(monkeypatch, input_cod
 def test_akshare_calls_run_without_proxy_and_restore_environment(
     monkeypatch, method_name, fake_attr, call_provider
 ):
+    monkeypatch.setattr("src.data_providers.akshare_provider.settings.DATA_FETCH_DISABLE_PROXY", True)
     monkeypatch.setenv("http_proxy", "http://127.0.0.1:7890")
     monkeypatch.setenv("https_proxy", "http://127.0.0.1:7890")
     seen_env = {}
@@ -359,3 +386,26 @@ def test_akshare_calls_run_without_proxy_and_restore_environment(
     assert seen_env[method_name] == {"http_proxy": False, "https_proxy": False}
     assert os.environ["http_proxy"] == "http://127.0.0.1:7890"
     assert os.environ["https_proxy"] == "http://127.0.0.1:7890"
+
+
+def test_akshare_uses_configured_no_proxy_context(monkeypatch):
+    calls = []
+
+    @contextmanager
+    def fake_no_proxy_context(disable_proxy=False):
+        calls.append(disable_proxy)
+        yield
+
+    def fake_stock_info_a_code_name():
+        return pd.DataFrame({"code": ["600000"], "name": ["浦发银行"]})
+
+    monkeypatch.setattr("src.data_providers.akshare_provider.no_proxy_context", fake_no_proxy_context)
+    monkeypatch.setattr("src.data_providers.akshare_provider.settings.DATA_FETCH_DISABLE_PROXY", True)
+    monkeypatch.setattr(
+        "src.data_providers.akshare_provider.ak.stock_info_a_code_name",
+        fake_stock_info_a_code_name,
+    )
+
+    AkshareProvider().get_stock_basic()
+
+    assert calls == [True]

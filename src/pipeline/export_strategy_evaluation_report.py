@@ -1,0 +1,69 @@
+"""Export strategy-version evaluation reports to Markdown files."""
+
+from __future__ import annotations
+
+import argparse
+from collections.abc import Sequence
+from datetime import date
+from pathlib import Path
+
+from src.config.settings import DB_PATH
+from src.database.duckdb_store import StockAgentStore
+from src.reports.strategy_evaluation_report import generate_strategy_evaluation_report
+
+
+def _resolve_db_path(db_path: str | None) -> str:
+    return db_path if db_path is not None else DB_PATH
+
+
+def export_strategy_evaluation_report(
+    db_path: str | None = None,
+    output_dir: str = "reports",
+    report_date: str | None = None,
+) -> str:
+    """Read persisted strategy evaluation data, render Markdown, write it, and return the path."""
+    resolved_db_path = _resolve_db_path(db_path)
+    store = StockAgentStore(resolved_db_path)
+    evaluation = store.load_strategy_version_evaluation()
+    performance = store.load_strategy_version_performance()
+    resolved_report_date = report_date or date.today().isoformat()
+    report = generate_strategy_evaluation_report(
+        evaluation=evaluation,
+        performance=performance,
+        report_date=resolved_report_date,
+    )
+
+    output_path = Path(output_dir) / f"strategy_evaluation_{resolved_report_date}.md"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(report, encoding="utf-8")
+    return str(output_path)
+
+
+def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Export strategy-version evaluation Markdown report.")
+    parser.add_argument("--db-path", default=None)
+    parser.add_argument("--output-dir", default="reports")
+    parser.add_argument("--report-date", default=None, help="Optional report date, format YYYY-MM-DD.")
+    return parser.parse_args(argv)
+
+
+def main(argv: Sequence[str] | None = None) -> None:
+    args = _parse_args(argv)
+    resolved_db_path = _resolve_db_path(args.db_path)
+    store = StockAgentStore(resolved_db_path)
+    evaluation = store.load_strategy_version_evaluation()
+    performance = store.load_strategy_version_performance()
+    output_path = export_strategy_evaluation_report(
+        db_path=resolved_db_path,
+        output_dir=args.output_dir,
+        report_date=args.report_date,
+    )
+    content = Path(output_path).read_text(encoding="utf-8")
+    print(f"strategy_version_evaluation 行数: {len(evaluation)}")
+    print(f"strategy_version_performance 行数: {len(performance)}")
+    print(f"输出文件路径: {output_path}")
+    print(f"报告字符数: {len(content)}")
+
+
+if __name__ == "__main__":
+    main()

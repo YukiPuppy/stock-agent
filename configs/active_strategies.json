@@ -1,0 +1,28 @@
+{
+  "active_strategies": [
+    {
+      "strategy_name": "trend_pullback",
+      "strategy_version": "v2_conservative",
+      "recommendation": "enable_observation",
+      "evaluation_score": 34.6113
+    },
+    {
+      "strategy_name": "trend_pullback",
+      "strategy_version": "v1",
+      "recommendation": "enable_observation",
+      "evaluation_score": 33.381
+    },
+    {
+      "strategy_name": "trend_pullback",
+      "strategy_version": "v3_loose",
+      "recommendation": "enable_observation",
+      "evaluation_score": 32.5735
+    },
+    {
+      "strategy_name": "breakout_volume",
+      "strategy_version": "v2_no_chase",
+      "recommendation": "enable_observation",
+      "evaluation_score": 31.2395
+    }
+  ]
+}

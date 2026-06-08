@@ -45,6 +45,7 @@ def compute_daily_factors(daily_bars: pd.DataFrame) -> pd.DataFrame:
     factors["ma10"] = _rolling_mean(grouped["close"], 10)
     factors["ma20"] = _rolling_mean(grouped["close"], 20)
     factors["volume_ma5"] = _rolling_mean(grouped["volume"], 5)
+    # amount_ma5 follows the system daily_bars amount unit: thousand yuan.
     factors["amount_ma5"] = _rolling_mean(grouped["amount"], 5)
     factors["volume_ratio_5"] = _safe_divide(bars["volume"], factors["volume_ma5"])
     factors["high_20"] = _rolling_max(grouped["high"], 20)

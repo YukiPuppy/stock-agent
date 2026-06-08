@@ -8,6 +8,12 @@ TRADE_PLAN_COLUMNS = [
     "code",
     "name",
     "rank",
+    "strategy_names",
+    "strategy_versions",
+    "active_signal_count",
+    "avg_strategy_weight",
+    "recommendations",
+    "risk_flags",
     "close",
     "strategy_type",
     "action",
@@ -77,6 +83,12 @@ def _build_plan_row(row: pd.Series) -> dict:
         "code": row.get("code"),
         "name": row.get("name"),
         "rank": int(row["rank"]) if pd.notna(row["rank"]) else None,
+        "strategy_names": row.get("strategy_names"),
+        "strategy_versions": row.get("strategy_versions"),
+        "active_signal_count": _to_int_or_none(row.get("active_signal_count")),
+        "avg_strategy_weight": _round_number(row.get("avg_strategy_weight")),
+        "recommendations": row.get("recommendations"),
+        "risk_flags": row.get("risk_flags"),
         "close": _round_price(row["close"]),
         "strategy_type": strategy_type,
         "action": action,
@@ -88,6 +100,11 @@ def _build_plan_row(row: pd.Series) -> dict:
 
 
 def _classify_strategy(row: pd.Series) -> tuple[str, str]:
+    risk_flags = _risk_flag_set(row.get("risk_flags"))
+    if "suspended" in risk_flags:
+        return "watch_only", "仅观察"
+    if "limit_down_close" in risk_flags:
+        return "watch_only", "仅观察"
     if row["above_ma5"] and row["above_ma10"] and row["close_position_20"] >= 0.6:
         return "trend_pullback", "回踩低吸"
     if row["pct_chg_5d"] > 0.05 and row["volume_ratio_5"] >= 1.2 and row["close_position_20"] >= 0.7:
@@ -140,9 +157,21 @@ def _price_fields(strategy_type: str, close: float) -> dict:
 
 
 def _round_price(value: float) -> float | None:
-    if pd.isna(value):
+    if _is_missing(value):
         return None
     return round(float(value), 2)
+
+
+def _round_number(value: object) -> float | None:
+    if _is_missing(value):
+        return None
+    return round(float(value), 4)
+
+
+def _to_int_or_none(value: object) -> int | None:
+    if _is_missing(value):
+        return None
+    return int(value)
 
 
 def _plan_reason(row: pd.Series) -> str:
@@ -151,10 +180,87 @@ def _plan_reason(row: pd.Series) -> str:
     pct_chg_5d = _format_percent(row.get("pct_chg_5d"))
     volume_ratio_5 = _format_number(row.get("volume_ratio_5"))
     close_position_20 = _format_number(row.get("close_position_20"))
-    return (
+    base_reason = (
         f"{reason}；score={score}，5日涨跌幅={pct_chg_5d}，"
         f"5日量比={volume_ratio_5}，20日位置={close_position_20}。"
     )
+    strategy_reason = _strategy_evaluation_reason(row)
+    risk_reason = _risk_reason(row)
+    return f"{base_reason}{strategy_reason}{risk_reason}"
+
+
+def _risk_reason(row: pd.Series) -> str:
+    flags = _risk_flag_set(row.get("risk_flags"))
+    parts = []
+    if "suspended" in flags:
+        parts.append("停牌或停牌风险，暂不生成买入计划")
+    if "limit_up_close" in flags:
+        parts.append("涨停收盘，次日可能存在买入不可执行风险")
+    if "limit_down_close" in flags:
+        parts.append("跌停收盘，短期流动性和风险较高")
+    if "market_high_risk" in flags:
+        parts.append("当前市场环境偏弱，计划置信度需降低")
+    if "missing_daily_basic" in flags or "missing_market_value" in flags:
+        parts.append("部分 daily_basic 扩展指标缺失，需降低置信度")
+    if "strong_main_outflow" in flags:
+        parts.append("主力资金明显流出，计划置信度降低")
+    elif "main_outflow" in flags:
+        parts.append("资金流偏弱，需观察承接")
+    if "strong_main_inflow" in flags:
+        parts.append("资金流相对积极，但仍需结合价格和计划区间执行")
+    if "weak_industry" in flags:
+        parts.append("所属行业相对弱势，计划置信度降低")
+    if "strong_industry" in flags:
+        parts.append("所属行业相对强势，存在板块共振加分，但仍需按计划执行")
+    if "missing_industry_strength" in flags:
+        parts.append("行业强度数据缺失，需降低判断置信度")
+    if not parts:
+        return ""
+    return "；".join(parts) + "。"
+
+
+def _risk_flag_set(value: object) -> set[str]:
+    if _is_missing(value):
+        return set()
+    return {flag.strip() for flag in str(value).split(",") if flag.strip()}
+
+
+def _strategy_evaluation_reason(row: pd.Series) -> str:
+    parts = []
+    strategy_names = _format_optional_text(row.get("strategy_names"))
+    strategy_versions = _format_optional_text(row.get("strategy_versions"))
+    recommendations = _format_optional_text(row.get("recommendations"))
+    avg_strategy_weight = row.get("avg_strategy_weight")
+
+    if strategy_names or strategy_versions:
+        source = strategy_names
+        if strategy_names and strategy_versions:
+            source = f"{strategy_names}:{strategy_versions}"
+        elif strategy_versions:
+            source = strategy_versions
+        parts.append(f"策略来源：{source}")
+    if recommendations:
+        parts.append(f"策略建议：{recommendations}")
+    if not _is_missing(avg_strategy_weight):
+        parts.append(f"平均策略权重：{float(avg_strategy_weight):.2f}")
+
+    if not parts:
+        return ""
+    return "；".join(parts) + "。"
+
+
+def _format_optional_text(value: object) -> str:
+    if _is_missing(value):
+        return ""
+    return str(value).strip()
+
+
+def _is_missing(value: object) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, str) and not value.strip():
+        return True
+    return bool(pd.isna(value))
 
 
 def _format_number(value: object) -> str:

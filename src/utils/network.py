@@ -6,24 +6,14 @@ import os
 from collections.abc import Iterator
 from contextlib import contextmanager
 
-
-PROXY_ENV_KEYS = ["http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY", "all_proxy", "ALL_PROXY"]
+from src.utils.proxy import PROXY_ENV_KEYS, no_proxy_context
 
 
 @contextmanager
 def without_proxy() -> Iterator[None]:
     """Temporarily remove proxy environment variables from the current process."""
-    saved = {key: os.environ.get(key) for key in PROXY_ENV_KEYS}
-    try:
-        for key in PROXY_ENV_KEYS:
-            os.environ.pop(key, None)
+    with no_proxy_context(True):
         yield
-    finally:
-        for key, value in saved.items():
-            if value is None:
-                os.environ.pop(key, None)
-            else:
-                os.environ[key] = value
 
 
 def clear_proxy_env_for_process() -> None:

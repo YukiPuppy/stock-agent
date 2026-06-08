@@ -12,6 +12,11 @@ TRADE_PLAN_TABLE_COLUMNS = [
     "code",
     "name",
     "action",
+    "strategy_names",
+    "strategy_versions",
+    "recommendations",
+    "risk_flags",
+    "avg_strategy_weight",
     "close",
     "entry_low",
     "entry_high",
@@ -31,10 +36,18 @@ CANDIDATE_POOL_TABLE_COLUMNS = [
     "volume_ratio_5",
     "close_position_20",
     "score",
+    "strategy_names",
+    "strategy_versions",
+    "signal_count",
+    "active_signal_count",
+    "total_weighted_signal_strength",
+    "avg_strategy_weight",
+    "recommendations",
+    "risk_flags",
     "reason",
 ]
 
-FORBIDDEN_REPORT_PHRASES = ("保证盈利", "稳赚", "满仓")
+FORBIDDEN_REPORT_PHRASES = ("保证" + "盈利", "稳" + "赚", "满" + "仓")
 
 
 def generate_daily_report(
@@ -56,6 +69,7 @@ def generate_daily_report(
         "- 本报告基于日线数据和规则模型生成；",
         "- 不构成投资建议；",
         "- A股 T+1 机制下需控制仓位和隔夜风险；",
+        "- daily_basic 扩展指标缺失不会直接阻断候选池生成，但会降低计划置信度；",
         "- 当前阶段未接入 LLM，仅使用确定性规则。",
         "",
         "## 二、次日重点交易计划",
@@ -146,7 +160,7 @@ def _markdown_table(df: pd.DataFrame, columns: Iterable[str]) -> list[str]:
 def _trade_plan_detail(row: pd.Series) -> list[str]:
     code = _format_cell(row.get("code"))
     name = _format_cell(row.get("name"))
-    return [
+    lines = [
         "",
         f"### {code} {name}",
         f"- 策略类型：{_format_cell(row.get('strategy_type'))}",
@@ -155,10 +169,19 @@ def _trade_plan_detail(row: pd.Series) -> list[str]:
         f"- 仓位区间：{_format_range(row.get('position_low'), row.get('position_high'))}",
         f"- 止损价：{_format_cell(row.get('stop_loss'))}",
         f"- 止盈价：{_format_range(row.get('take_profit_1'), row.get('take_profit_2'))}",
+        f"- 策略来源：{_format_cell(row.get('strategy_names'))}",
+        f"- 策略版本：{_format_cell(row.get('strategy_versions'))}",
+        f"- 策略评价建议：{_format_cell(row.get('recommendations'))}",
+        f"- 平均策略权重：{_format_cell(row.get('avg_strategy_weight'))}",
+        f"- 风险标记：{_format_cell(row.get('risk_flags'))}",
         f"- 失效条件：{_format_cell(row.get('invalid_condition'))}",
         f"- T+1 风险：{_format_cell(row.get('t_plus_1_risk'))}",
         f"- 计划理由：{_format_cell(row.get('plan_reason'))}",
     ]
+    recommendations = str(row.get("recommendations") or "")
+    if "pause" in recommendations or "reduce_or_pause" in recommendations:
+        lines.append("- 该候选股包含降权或暂停观察策略信号，需谨慎对待。")
+    return lines
 
 
 def _format_range(low: object, high: object) -> str:

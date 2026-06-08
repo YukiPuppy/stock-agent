@@ -1,6 +1,4 @@
 import pandas as pd
-import pytest
-
 from src.database.duckdb_store import StockAgentStore
 from src.pipeline.update_stock_basic import update_stock_basic
 
@@ -32,6 +30,8 @@ def test_update_stock_basic_filters_and_writes_to_duckdb(tmp_path, monkeypatch):
     )
 
     db_path = tmp_path / "stock_agent.duckdb"
+    monkeypatch.setattr("src.pipeline.update_stock_basic.settings.DEFAULT_DATA_PROVIDER", "tushare")
+
     result = update_stock_basic(str(db_path))
     saved = StockAgentStore(str(db_path)).load_stock_basic()
 
@@ -55,7 +55,7 @@ def test_update_stock_basic_filters_and_writes_to_duckdb(tmp_path, monkeypatch):
     assert result["code"].tolist() == ["600000", "000001"]
     assert result["name"].tolist() == ["浦发银行", "平安银行"]
     assert saved.to_dict("records") == expected_records
-    assert provider_names == ["akshare"]
+    assert provider_names == ["tushare"]
 
 
 def test_update_stock_basic_passes_provider_to_factory(tmp_path, monkeypatch):
@@ -86,17 +86,65 @@ def test_update_stock_basic_passes_provider_to_factory(tmp_path, monkeypatch):
 
     update_stock_basic(str(tmp_path / "stock_agent.duckdb"), provider="AKSHARE")
 
-    assert provider_names == ["AKSHARE"]
+    assert provider_names == ["akshare"]
 
 
-def test_update_stock_basic_tushare_raises_not_implemented(monkeypatch):
+def test_update_stock_basic_tushare_uses_mock_provider(tmp_path, monkeypatch):
+    raw = pd.DataFrame(
+        {
+            "code": ["600000"],
+            "name": ["浦发银行"],
+            "market": ["SH"],
+            "board": ["主板"],
+            "list_status": ["L"],
+        }
+    )
+
+    class FakeProvider:
+        def get_stock_basic(self):
+            return raw
+
+    provider_names = []
+
     def fake_get_data_provider(name="akshare"):
-        raise NotImplementedError("TushareProvider will be added after AKShare MVP is verified.")
+        provider_names.append(name)
+        return FakeProvider()
 
     monkeypatch.setattr(
         "src.pipeline.update_stock_basic.get_data_provider",
         fake_get_data_provider,
     )
 
-    with pytest.raises(NotImplementedError, match="TushareProvider will be added"):
-        update_stock_basic(provider="tushare")
+    result = update_stock_basic(str(tmp_path / "stock_agent.duckdb"), provider="tushare")
+
+    assert provider_names == ["tushare"]
+    assert result["code"].tolist() == ["600000"]
+
+
+def test_update_stock_basic_default_provider_uses_settings(tmp_path, monkeypatch):
+    raw = pd.DataFrame(
+        {
+            "code": ["600000"],
+            "name": ["浦发银行"],
+            "market": ["SH"],
+            "board": ["主板"],
+            "list_status": ["L"],
+        }
+    )
+
+    class FakeProvider:
+        def get_stock_basic(self):
+            return raw
+
+    provider_names = []
+
+    def fake_get_data_provider(name=None):
+        provider_names.append(name)
+        return FakeProvider()
+
+    monkeypatch.setattr("src.pipeline.update_stock_basic.settings.DEFAULT_DATA_PROVIDER", "tushare")
+    monkeypatch.setattr("src.pipeline.update_stock_basic.get_data_provider", fake_get_data_provider)
+
+    update_stock_basic(str(tmp_path / "stock_agent.duckdb"))
+
+    assert provider_names == ["tushare"]

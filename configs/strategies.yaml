@@ -1,0 +1,28 @@
+trend_pullback:
+  enabled: true
+  version: v1
+  min_pct_chg_5d: 0.03
+  max_pct_chg_1d: 0.06
+  min_close_position_20: 0.55
+  min_volume_ratio_5: 1.0
+  require_above_ma5: true
+  require_above_ma10: true
+
+breakout_volume:
+  enabled: true
+  version: v1
+  min_pct_chg_5d: 0.05
+  min_volume_ratio_5: 1.3
+  min_close_position_20: 0.70
+  max_pct_chg_1d: 0.095
+  require_above_ma5: true
+
+support_rebound:
+  enabled: true
+  version: v1
+  min_pct_chg_1d: -0.095
+  max_pct_chg_1d: -0.02
+  min_close_position_20: 0.35
+  max_close_position_20: 0.75
+  require_above_ma20: true
+  min_amount_ma5: 0

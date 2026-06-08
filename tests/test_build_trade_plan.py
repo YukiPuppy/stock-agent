@@ -25,6 +25,12 @@ def _candidate_rows() -> pd.DataFrame:
             "score": [80.0, 90.0, 70.0],
             "rank": [1, 1, 2],
             "reason": ["旧日期", "趋势较强", "条件不足"],
+            "strategy_names": ["trend_pullback", "trend_pullback", "watch_only"],
+            "strategy_versions": ["v0", "v1", "v1"],
+            "active_signal_count": [1, 1, 0],
+            "avg_strategy_weight": [1.0, 1.2, 0.8],
+            "recommendations": ["enable_observation", "enable_observation", "pause"],
+            "risk_flags": ["", "", "weak_signal"],
         }
     )
 
@@ -41,6 +47,8 @@ def test_build_trade_plan_reads_candidate_pool_generates_and_saves_latest_date(t
     assert result.loc[0, "trade_date"] == "2026-01-02"
     assert result.loc[0, "code"] == "600000"
     assert result.loc[0, "strategy_type"] == "trend_pullback"
+    assert result.loc[0, "strategy_versions"] == "v1"
+    assert result.loc[0, "recommendations"] == "enable_observation"
     pd.testing.assert_frame_equal(saved, result)
 
 

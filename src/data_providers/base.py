@@ -15,5 +15,11 @@ class BaseDataProvider(ABC):
         """Return normalized stock-basic metadata."""
 
     @abstractmethod
-    def get_daily_bars(self, code: str, start_date: str, end_date: str) -> pd.DataFrame:
+    def get_daily_bars(
+        self,
+        code: str,
+        start_date: str,
+        end_date: str,
+        adjust: str | None = None,
+    ) -> pd.DataFrame:
         """Return normalized daily bars for one stock."""

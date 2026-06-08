@@ -1,4 +1,7 @@
-"""AKShare-backed data provider for A-share market data."""
+"""AKShare-backed data provider for A-share market data.
+
+AKShare is kept as a fallback/diagnostic provider. The production data source is Tushare.
+"""
 
 from __future__ import annotations
 
@@ -9,8 +12,9 @@ from collections.abc import Callable
 import akshare as ak
 import pandas as pd
 
+from src.config import settings
 from src.data_providers.base import BaseDataProvider
-from src.utils.network import without_proxy
+from src.utils.proxy import no_proxy_context
 
 
 STOCK_BASIC_COLUMNS = ["code", "name", "market", "board", "list_status"]
@@ -130,6 +134,10 @@ def _normalize_daily_bars(raw: pd.DataFrame, code: str) -> pd.DataFrame:
     for column in ("open", "high", "low", "close", "volume", "amount"):
         result[column] = pd.to_numeric(df[column], errors="coerce")
 
+    # AKShare is retained for fallback/diagnostic use; production daily_bars units follow Tushare Pro.
+    # Keep fallback output compatible with daily_bars: volume is 手 and amount is 千元.
+    result["amount"] = result["amount"] / 1000
+
     return result.loc[:, DAILY_BAR_COLUMNS]
 
 
@@ -137,7 +145,7 @@ def _call_with_retries(fetch: Callable[[], pd.DataFrame]) -> pd.DataFrame:
     last_error: Exception | None = None
     for attempt in range(3):
         try:
-            with without_proxy():
+            with no_proxy_context(settings.DATA_FETCH_DISABLE_PROXY):
                 return fetch()
         except Exception as exc:
             last_error = exc
@@ -153,7 +161,7 @@ class AkshareProvider(BaseDataProvider):
     def get_stock_basic(self) -> pd.DataFrame:
         """Return A-share code/name metadata with normalized provider fields."""
         try:
-            with without_proxy():
+            with no_proxy_context(settings.DATA_FETCH_DISABLE_PROXY):
                 raw = ak.stock_info_a_code_name()
         except Exception as exc:
             raise RuntimeError(f"AKShare stock basic fetch failed in direct/no-proxy mode: {exc}") from exc
@@ -176,7 +184,13 @@ class AkshareProvider(BaseDataProvider):
 
         return result.loc[:, STOCK_BASIC_COLUMNS]
 
-    def get_daily_bars(self, code: str, start_date: str, end_date: str) -> pd.DataFrame:
+    def get_daily_bars(
+        self,
+        code: str,
+        start_date: str,
+        end_date: str,
+        adjust: str | None = None,
+    ) -> pd.DataFrame:
         """Return normalized daily bars for a single A-share stock."""
         normalized_code = _normalize_code(code)
         ak_start_date = _normalize_akshare_date(start_date)

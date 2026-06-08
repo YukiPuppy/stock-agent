@@ -7,7 +7,7 @@ import time
 
 import pandas as pd
 
-from src.config.settings import DB_PATH
+from src.config import settings
 from src.data_providers.akshare_provider import DAILY_BAR_COLUMNS
 from src.data_providers.factory import get_data_provider
 from src.database.duckdb_store import StockAgentStore
@@ -15,7 +15,11 @@ from src.utils.network import clear_proxy_env_for_process
 
 
 def _resolve_db_path(db_path: str | None) -> str:
-    return db_path if db_path is not None else DB_PATH
+    return db_path if db_path is not None else settings.DB_PATH
+
+
+def _resolve_provider(provider: str | None) -> str:
+    return str(provider if provider is not None else settings.DEFAULT_DATA_PROVIDER).strip().lower()
 
 
 def _fetch_and_save_daily_bars(
@@ -24,10 +28,11 @@ def _fetch_and_save_daily_bars(
     db_path: str | None = None,
     limit: int | None = None,
     sleep_seconds: float = 0,
-    provider: str = "akshare",
+    provider: str | None = None,
 ) -> tuple[pd.DataFrame, int, int, int, str]:
     resolved_db_path = _resolve_db_path(db_path)
-    data_provider = get_data_provider(provider)
+    resolved_provider = _resolve_provider(provider)
+    data_provider = get_data_provider(resolved_provider)
     store = StockAgentStore(resolved_db_path)
     stock_basic = store.load_stock_basic()
 
@@ -72,7 +77,7 @@ def update_daily_bars(
     db_path: str | None = None,
     limit: int | None = None,
     sleep_seconds: float = 0,
-    provider: str = "akshare",
+    provider: str | None = None,
 ) -> pd.DataFrame:
     """Fetch, persist, and return daily bars for stocks in stock_basic."""
     result, _, success_count, failure_count, _ = _fetch_and_save_daily_bars(
@@ -97,7 +102,11 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--db-path", default=None)
     parser.add_argument("--sleep-seconds", type=float, default=0)
-    parser.add_argument("--provider", default="akshare")
+    parser.add_argument(
+        "--provider",
+        default=settings.DEFAULT_DATA_PROVIDER,
+        help="默认数据源来自 DEFAULT_DATA_PROVIDER，当前推荐使用 tushare。",
+    )
     return parser.parse_args()
 
 

@@ -1,0 +1,43 @@
+{
+  "trend_pullback": {
+    "enabled": true,
+    "max_combinations": 50,
+    "base_params": {
+      "require_above_ma5": true,
+      "require_above_ma10": true
+    },
+    "search_space": {
+      "min_pct_chg_5d": [0.02, 0.03, 0.05],
+      "max_pct_chg_1d": [0.04, 0.06, 0.08],
+      "min_close_position_20": [0.45, 0.55, 0.65],
+      "min_volume_ratio_5": [0.8, 1.0, 1.2]
+    }
+  },
+  "breakout_volume": {
+    "enabled": true,
+    "max_combinations": 40,
+    "base_params": {
+      "require_above_ma5": true
+    },
+    "search_space": {
+      "min_pct_chg_5d": [0.04, 0.05, 0.08],
+      "min_volume_ratio_5": [1.2, 1.5, 2.0],
+      "min_close_position_20": [0.65, 0.75, 0.85],
+      "max_pct_chg_1d": [0.06, 0.08, 0.095]
+    }
+  },
+  "support_rebound": {
+    "enabled": true,
+    "max_combinations": 40,
+    "base_params": {
+      "require_above_ma20": true,
+      "min_amount_ma5": 0
+    },
+    "search_space": {
+      "min_pct_chg_1d": [-0.095, -0.07],
+      "max_pct_chg_1d": [-0.02, -0.025, -0.03],
+      "min_close_position_20": [0.30, 0.35, 0.40],
+      "max_close_position_20": [0.70, 0.75, 0.80]
+    }
+  }
+}

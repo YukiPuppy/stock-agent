@@ -24,6 +24,12 @@ def _candidate_rows() -> pd.DataFrame:
             "score": [90.0, 80.0, 70.0, 60.0, 50.0],
             "rank": [1, 2, 3, 4, 6],
             "reason": ["趋势较强", "突破形态", "支撑附近", "条件不足", "超出范围"],
+            "strategy_names": ["trend_pullback", "breakout_volume", "support_rebound", None, None],
+            "strategy_versions": ["v1", "v2", "v3_loose", None, None],
+            "active_signal_count": [1, 1, 1, None, None],
+            "avg_strategy_weight": [1.2, 0.9, 1.0, None, None],
+            "recommendations": ["enable_observation", "reduce_or_pause", "enable_observation", None, None],
+            "risk_flags": ["low_risk", "high_drawdown", "", None, None],
         }
     )
 
@@ -106,3 +112,103 @@ def test_generate_trade_plan_contains_risk_and_reason_text():
     assert "趋势较强" in row["plan_reason"]
     assert "score=90.00" in row["plan_reason"]
     assert "5日涨跌幅=4.00%" in row["plan_reason"]
+
+
+def test_generate_trade_plan_keeps_strategy_evaluation_fields_and_reason():
+    result = generate_trade_plan(_candidate_rows(), max_items=1)
+    row = result.iloc[0]
+
+    assert row["strategy_names"] == "trend_pullback"
+    assert row["strategy_versions"] == "v1"
+    assert row["recommendations"] == "enable_observation"
+    assert row["active_signal_count"] == 1
+    assert row["avg_strategy_weight"] == pytest.approx(1.2)
+    assert "策略来源：trend_pullback:v1" in row["plan_reason"]
+    assert "策略建议：enable_observation" in row["plan_reason"]
+    assert "平均策略权重：1.20" in row["plan_reason"]
+
+
+def test_generate_trade_plan_allows_missing_strategy_evaluation_fields():
+    candidates = _candidate_rows().drop(
+        columns=[
+            "strategy_names",
+            "strategy_versions",
+            "active_signal_count",
+            "avg_strategy_weight",
+            "recommendations",
+            "risk_flags",
+        ]
+    )
+
+    result = generate_trade_plan(candidates, max_items=1)
+
+    assert len(result) == 1
+    assert pd.isna(result.loc[0, "strategy_versions"])
+    assert "策略来源" not in result.loc[0, "plan_reason"]
+
+
+def test_generate_trade_plan_writes_limit_risk_reasons():
+    candidates = _candidate_rows()
+    candidates.loc[candidates["code"] == "600000", "risk_flags"] = "limit_up_close"
+    candidates.loc[candidates["code"] == "000001", "risk_flags"] = "limit_down_close"
+
+    result = generate_trade_plan(candidates, max_items=2).set_index("code")
+
+    assert "涨停收盘，次日可能存在买入不可执行风险" in result.loc["600000", "plan_reason"]
+    assert result.loc["000001", "action"] == "仅观察"
+    assert "跌停收盘，短期流动性和风险较高" in result.loc["000001", "plan_reason"]
+
+
+def test_generate_trade_plan_downgrades_suspended_to_watch_only():
+    candidates = _candidate_rows()
+    candidates.loc[candidates["code"] == "600000", "risk_flags"] = "suspended"
+
+    result = generate_trade_plan(candidates, max_items=1)
+
+    assert result.loc[0, "strategy_type"] == "watch_only"
+    assert result.loc[0, "action"] == "仅观察"
+    assert "停牌或停牌风险，暂不生成买入计划" in result.loc[0, "plan_reason"]
+
+
+def test_generate_trade_plan_writes_daily_basic_missing_risk_reason():
+    candidates = _candidate_rows()
+    candidates.loc[candidates["code"] == "600000", "risk_flags"] = "missing_daily_basic,missing_market_value"
+
+    result = generate_trade_plan(candidates, max_items=1)
+
+    assert "部分 daily_basic 扩展指标缺失，需降低置信度" in result.loc[0, "plan_reason"]
+
+
+def test_generate_trade_plan_writes_market_high_risk_reason():
+    candidates = _candidate_rows()
+    candidates.loc[candidates["code"] == "600000", "risk_flags"] = "market_high_risk"
+
+    result = generate_trade_plan(candidates, max_items=1)
+
+    assert "当前市场环境偏弱，计划置信度需降低" in result.loc[0, "plan_reason"]
+
+
+def test_generate_trade_plan_writes_moneyflow_risk_reasons():
+    candidates = _candidate_rows()
+    candidates.loc[candidates["code"] == "600000", "risk_flags"] = "strong_main_outflow"
+    candidates.loc[candidates["code"] == "000001", "risk_flags"] = "main_outflow"
+    candidates.loc[candidates["code"] == "000002", "risk_flags"] = "strong_main_inflow"
+
+    result = generate_trade_plan(candidates, max_items=3).set_index("code")
+
+    assert "主力资金明显流出，计划置信度降低" in result.loc["600000", "plan_reason"]
+    assert "资金流偏弱，需观察承接" in result.loc["000001", "plan_reason"]
+    assert "资金流相对积极，但仍需结合价格和计划区间执行" in result.loc["000002", "plan_reason"]
+
+
+def test_generate_trade_plan_writes_industry_risk_reasons():
+    candidates = _candidate_rows()
+    candidates.loc[candidates["code"] == "600000", "risk_flags"] = "weak_industry"
+    candidates.loc[candidates["code"] == "000001", "risk_flags"] = "strong_industry"
+    candidates.loc[candidates["code"] == "000002", "risk_flags"] = "missing_industry_strength"
+
+    result = generate_trade_plan(candidates, max_items=3).set_index("code")
+
+    assert "所属行业相对弱势，计划置信度降低" in result.loc["600000", "plan_reason"]
+    assert "所属行业相对强势，存在板块共振加分，但仍需按计划执行" in result.loc["000001", "plan_reason"]
+    assert "行业强度数据缺失，需降低判断置信度" in result.loc["000002", "plan_reason"]

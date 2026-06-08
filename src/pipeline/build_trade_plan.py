@@ -73,6 +73,8 @@ def main() -> None:
     print(f"使用交易日期: {used_trade_date}")
     print(f"candidate_pool 行数: {candidate_count}")
     print(f"trade_plan 行数: {len(trade_plan)}")
+    print(f"包含 strategy_versions: {'是' if 'strategy_versions' in trade_plan.columns else '否'}")
+    print(f"包含 recommendations: {'是' if 'recommendations' in trade_plan.columns else '否'}")
     print(f"保存数据库路径: {resolved_db_path}")
     print("交易计划详情:")
     print(trade_plan.to_string(index=False))
