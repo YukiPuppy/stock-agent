@@ -1,4 +1,20 @@
+# local generated files
+data/
+logs/
+reports/
+
+# env
 .env
+.env.*
+!.env.example
+
+# cache
+__pycache__/
+.pytest_cache/
+.venv/
+
+# mistaken temp file
+=.env
 .venv/
 __pycache__/
 *.pyc
