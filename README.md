@@ -27,7 +27,18 @@ DATA_FETCH_DISABLE_PROXY=true
 
 ENABLE_LLM_REPORT_AGENT=true
 LLM_PROVIDER=deepseek
-LLM_MODEL=deepseek-v4-flash
+DEFAULT_LLM_MODEL=deepseek-v4-flash
+REPORT_AGENT_MODEL=deepseek-v4-flash
+MARKET_REGIME_AGENT_MODEL=deepseek-v4-flash
+INDUSTRY_INSIGHT_AGENT_MODEL=deepseek-v4-flash
+FACTOR_INSIGHT_AGENT_MODEL=deepseek-v4-flash
+DAILY_REVIEW_AGENT_MODEL=deepseek-v4-flash
+RISK_REVIEW_AGENT_MODEL=deepseek-v4-pro
+BACKTEST_ANALYSIS_AGENT_MODEL=deepseek-v4-pro
+STRATEGY_RESEARCH_AGENT_MODEL=deepseek-v4-pro
+PARAMETER_ITERATION_AGENT_MODEL=deepseek-v4-pro
+# LLM_MODEL 保留为兼容字段，优先级低于具体 Agent 模型和 DEFAULT_LLM_MODEL。
+LLM_MODEL=
 LLM_API_KEY=your_deepseek_api_key
 LLM_BASE_URL=https://api.deepseek.com
 LLM_TIMEOUT_SECONDS=60
@@ -40,6 +51,7 @@ LLM_DISABLE_PROXY=true
 - 不要提交真实 DeepSeek API key。
 - `DATA_FETCH_DISABLE_PROXY=true` 用于数据拉取时绕过 Clash 等本地代理。
 - `LLM_DISABLE_PROXY=true` 用于 DeepSeek 调用时绕过代理。
+- 未单独配置 Agent 模型时，默认使用 `DEFAULT_LLM_MODEL`；轻量日常类 Agent 建议使用 `deepseek-v4-flash`，风险与策略研究类 Agent 建议使用 `deepseek-v4-pro`。
 - 如果不需要 LLM 报告，可以关闭 `ENABLE_LLM_REPORT_AGENT`。
 
 ## 四、数据说明
@@ -188,6 +200,28 @@ uv run python -m src.pipeline.run_llm_agents_workflow
 - `FactorInsightAgent`：因子诊断解释。
 - `StrategyResearchAgent`：策略研究建议。
 - `ParameterIterationAgent`：参数候选建议。
+
+Agent Registry：
+
+- 配置文件：`configs/agent_registry.json`。
+- 读取入口：`src.agents.agent_registry`。
+- 支持按 `category` 和 `workflow` 查询 Agent。
+
+Agent 分类：
+
+- `reporting`：综合报告生成，目前包含 `ReportAgent`。
+- `risk`：风险审查，目前包含 `RiskReviewAgent`。
+- `review`：执行与复盘解释，目前包含 `DailyReviewAgent`。
+- `market`：市场环境解释，目前包含 `MarketRegimeAgent`。
+- `industry`：行业强弱解释，目前包含 `IndustryInsightAgent`。
+- `factor`：因子诊断解释，目前包含 `FactorInsightAgent`。
+- `research`：策略研究、回测解释和参数候选建议，目前包含 `BacktestAnalysisAgent`、`StrategyResearchAgent`、`ParameterIterationAgent`。
+
+权限边界：
+
+- `read_only`：只能读取结构化结果并生成报告。
+- `proposal_only`：只能生成候选建议文件，必须人工复核后才能进入正式配置。
+- 任何 Agent 都不得自动修改 `configs/active_strategies.json`、`configs/parameter_search_space.json`，也不得执行交易。
 
 ### 6. 系统验收
 

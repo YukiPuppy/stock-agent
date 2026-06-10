@@ -10,9 +10,11 @@ from src.pipeline import run_risk_review_agent as pipeline
 class FakeLLMClient:
     def __init__(self):
         self.prompts = []
+        self.generate_kwargs = []
 
-    def generate(self, prompt: str) -> str:
+    def generate(self, prompt: str, *args, **kwargs) -> str:
         self.prompts.append(prompt)
+        self.generate_kwargs.append(dict(kwargs))
         return "## 一、总体风险结论\n仅供人工复核参考。"
 
 
@@ -45,7 +47,12 @@ def test_run_risk_review_agent_pipeline_uses_fake_llm_client(tmp_path, monkeypat
         pd.DataFrame([{"check_name": "daily_bars", "status": "warning", "issue_count": 1, "message": "missing"}])
     )
     fake_client = FakeLLMClient()
-    monkeypatch.setattr(pipeline, "get_llm_client", lambda: fake_client)
+    client_calls = []
+    monkeypatch.setattr(
+        pipeline,
+        "get_llm_client",
+        lambda *args, **kwargs: client_calls.append((args, kwargs)) or fake_client,
+    )
 
     output_path = pipeline.run_risk_review_agent_pipeline(
         db_path=str(db_path),
@@ -55,5 +62,8 @@ def test_run_risk_review_agent_pipeline_uses_fake_llm_client(tmp_path, monkeypat
 
     content = Path(output_path).read_text(encoding="utf-8")
     assert content.startswith("## 一、总体风险结论")
+    assert "仅供人工复核参考" in content
+    assert client_calls == [(("RiskReviewAgent",), {})]
     assert fake_client.prompts
+    assert fake_client.generate_kwargs == [{}]
     assert "warning" in fake_client.prompts[0]

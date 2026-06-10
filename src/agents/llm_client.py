@@ -9,14 +9,38 @@ import urllib.request
 from src.config import settings
 from src.utils.proxy import no_proxy_context
 
+DEFAULT_LLM_MODEL = "deepseek-v4-flash"
+AGENT_MODEL_ENV_VARS = {
+    "ReportAgent": "REPORT_AGENT_MODEL",
+    "MarketRegimeAgent": "MARKET_REGIME_AGENT_MODEL",
+    "IndustryInsightAgent": "INDUSTRY_INSIGHT_AGENT_MODEL",
+    "FactorInsightAgent": "FACTOR_INSIGHT_AGENT_MODEL",
+    "DailyReviewAgent": "DAILY_REVIEW_AGENT_MODEL",
+    "RiskReviewAgent": "RISK_REVIEW_AGENT_MODEL",
+    "BacktestAnalysisAgent": "BACKTEST_ANALYSIS_AGENT_MODEL",
+    "StrategyResearchAgent": "STRATEGY_RESEARCH_AGENT_MODEL",
+    "ParameterIterationAgent": "PARAMETER_ITERATION_AGENT_MODEL",
+}
+AGENT_DEFAULT_MODELS = {
+    "ReportAgent": "deepseek-v4-flash",
+    "MarketRegimeAgent": "deepseek-v4-flash",
+    "IndustryInsightAgent": "deepseek-v4-flash",
+    "FactorInsightAgent": "deepseek-v4-flash",
+    "DailyReviewAgent": "deepseek-v4-flash",
+    "RiskReviewAgent": "deepseek-v4-pro",
+    "BacktestAnalysisAgent": "deepseek-v4-pro",
+    "StrategyResearchAgent": "deepseek-v4-pro",
+    "ParameterIterationAgent": "deepseek-v4-pro",
+}
+
 
 class BaseLLMClient:
-    def generate(self, prompt: str) -> str:
+    def generate(self, prompt: str, *args, **kwargs) -> str:
         raise NotImplementedError
 
 
 class DisabledLLMClient(BaseLLMClient):
-    def generate(self, prompt: str) -> str:
+    def generate(self, prompt: str, *args, **kwargs) -> str:
         return "LLM is disabled. Please enable ENABLE_LLM_REPORT_AGENT and configure LLM_PROVIDER."
 
 
@@ -31,13 +55,14 @@ class DeepSeekClient(BaseLLMClient):
         if not str(api_key or "").strip():
             raise ValueError("LLM_API_KEY is not configured")
         self.api_key = str(api_key).strip()
-        self.model = str(model or "").strip() or "deepseek-v4-flash"
+        self.model = str(model or "").strip() or DEFAULT_LLM_MODEL
         self.base_url = (str(base_url or "").strip() or "https://api.deepseek.com").rstrip("/")
         self.timeout_seconds = int(timeout_seconds)
 
-    def generate(self, prompt: str) -> str:
+    def generate(self, prompt: str, *args, model: str | None = None, **kwargs) -> str:
+        resolved_model = str(model or "").strip() or self.model
         body = {
-            "model": self.model,
+            "model": resolved_model,
             "messages": [
                 {
                     "role": "system",
@@ -82,7 +107,7 @@ class DeepSeekClient(BaseLLMClient):
         return content
 
 
-def get_llm_client() -> BaseLLMClient:
+def get_llm_client(agent_name: str | None = None) -> BaseLLMClient:
     if not bool(getattr(settings, "ENABLE_LLM_REPORT_AGENT", False)):
         return DisabledLLMClient()
 
@@ -93,12 +118,36 @@ def get_llm_client() -> BaseLLMClient:
     if provider == "deepseek":
         return DeepSeekClient(
             api_key=str(getattr(settings, "LLM_API_KEY", "") or ""),
-            model=str(getattr(settings, "LLM_MODEL", "") or ""),
+            model=resolve_llm_model(agent_name),
             base_url=str(getattr(settings, "LLM_BASE_URL", "") or "https://api.deepseek.com"),
             timeout_seconds=int(getattr(settings, "LLM_TIMEOUT_SECONDS", 60) or 60),
         )
 
     raise ValueError(f"Unsupported LLM_PROVIDER: {provider}")
+
+
+def resolve_llm_model(agent_name: str | None = None) -> str:
+    """Resolve model with Agent-specific config taking precedence over defaults."""
+    normalized_agent_name = str(agent_name or "").strip()
+    model_env = AGENT_MODEL_ENV_VARS.get(normalized_agent_name)
+    if model_env:
+        agent_model = str(getattr(settings, model_env, "") or "").strip()
+        if agent_model:
+            return agent_model
+
+    default_model = str(getattr(settings, "DEFAULT_LLM_MODEL", "") or "").strip()
+    if default_model:
+        return default_model
+
+    legacy_model = str(getattr(settings, "LLM_MODEL", "") or "").strip()
+    if legacy_model:
+        return legacy_model
+
+    agent_default_model = AGENT_DEFAULT_MODELS.get(normalized_agent_name, "")
+    if agent_default_model:
+        return agent_default_model
+
+    return DEFAULT_LLM_MODEL
 
 
 def _redact_secret(text: str, secret: str) -> str:

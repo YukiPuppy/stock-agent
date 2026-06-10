@@ -16,7 +16,17 @@ TUSHARE_ENV_VARS = [
 ]
 LLM_ENV_VARS = [
     "LLM_PROVIDER",
+    "DEFAULT_LLM_MODEL",
     "LLM_MODEL",
+    "REPORT_AGENT_MODEL",
+    "MARKET_REGIME_AGENT_MODEL",
+    "INDUSTRY_INSIGHT_AGENT_MODEL",
+    "FACTOR_INSIGHT_AGENT_MODEL",
+    "DAILY_REVIEW_AGENT_MODEL",
+    "RISK_REVIEW_AGENT_MODEL",
+    "BACKTEST_ANALYSIS_AGENT_MODEL",
+    "STRATEGY_RESEARCH_AGENT_MODEL",
+    "PARAMETER_ITERATION_AGENT_MODEL",
     "LLM_API_KEY",
     "LLM_BASE_URL",
     "LLM_TIMEOUT_SECONDS",
@@ -63,7 +73,17 @@ def test_llm_settings_have_safe_defaults(monkeypatch):
     reloaded_settings = reload_settings_without_dotenv(monkeypatch)
 
     assert reloaded_settings.LLM_PROVIDER == "none"
+    assert reloaded_settings.DEFAULT_LLM_MODEL == ""
     assert reloaded_settings.LLM_MODEL == ""
+    assert reloaded_settings.REPORT_AGENT_MODEL == ""
+    assert reloaded_settings.MARKET_REGIME_AGENT_MODEL == ""
+    assert reloaded_settings.INDUSTRY_INSIGHT_AGENT_MODEL == ""
+    assert reloaded_settings.FACTOR_INSIGHT_AGENT_MODEL == ""
+    assert reloaded_settings.DAILY_REVIEW_AGENT_MODEL == ""
+    assert reloaded_settings.RISK_REVIEW_AGENT_MODEL == ""
+    assert reloaded_settings.BACKTEST_ANALYSIS_AGENT_MODEL == ""
+    assert reloaded_settings.STRATEGY_RESEARCH_AGENT_MODEL == ""
+    assert reloaded_settings.PARAMETER_ITERATION_AGENT_MODEL == ""
     assert reloaded_settings.LLM_API_KEY == ""
     assert reloaded_settings.LLM_BASE_URL == ""
     assert reloaded_settings.LLM_TIMEOUT_SECONDS == 60

@@ -34,7 +34,7 @@ def run_risk_review_agent_pipeline(
     daily_review = _safe_load(lambda: store.load_daily_review(trade_date=report_date))
     period_review = _safe_load(store.load_period_review)
 
-    llm_client = get_llm_client()
+    llm_client = get_llm_client("RiskReviewAgent")
     if isinstance(llm_client, DisabledLLMClient):
         markdown = _disabled_llm_placeholder(resolved_date)
     else:

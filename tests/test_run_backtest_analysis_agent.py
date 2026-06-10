@@ -9,7 +9,13 @@ from src.pipeline import run_backtest_analysis_agent as pipeline
 
 
 class FakeLLMClient:
-    def generate(self, prompt: str) -> str:
+    def __init__(self):
+        self.prompts: list[str] = []
+        self.generate_kwargs: list[dict] = []
+
+    def generate(self, prompt: str, *args, **kwargs) -> str:
+        self.prompts.append(prompt)
+        self.generate_kwargs.append(dict(kwargs))
         assert "BacktestAnalysisAgent" in prompt
         return "## 一、总体结论\nFake Markdown"
 
@@ -45,7 +51,13 @@ def test_run_backtest_analysis_agent_pipeline_uses_fake_llm_client(tmp_path, mon
             }
         )
     )
-    monkeypatch.setattr(pipeline, "get_llm_client", lambda: FakeLLMClient())
+    fake_client = FakeLLMClient()
+    client_calls = []
+    monkeypatch.setattr(
+        pipeline,
+        "get_llm_client",
+        lambda *args, **kwargs: client_calls.append((args, kwargs)) or fake_client,
+    )
 
     output_path = pipeline.run_backtest_analysis_agent_pipeline(
         db_path=str(db_path),
@@ -55,9 +67,16 @@ def test_run_backtest_analysis_agent_pipeline_uses_fake_llm_client(tmp_path, mon
 
     content = Path(output_path).read_text(encoding="utf-8")
     assert content == "## 一、总体结论\nFake Markdown"
+    assert client_calls == [(("BacktestAnalysisAgent",), {})]
+    assert fake_client.prompts
+    assert fake_client.generate_kwargs == [{}]
 
 
 def test_safe_llm_client_falls_back_to_disabled(monkeypatch):
-    monkeypatch.setattr(pipeline, "get_llm_client", lambda: (_ for _ in ()).throw(ValueError("bad config")))
+    monkeypatch.setattr(
+        pipeline,
+        "get_llm_client",
+        lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("bad config")),
+    )
 
     assert isinstance(pipeline._safe_llm_client(), DisabledLLMClient)

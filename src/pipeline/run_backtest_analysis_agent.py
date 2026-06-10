@@ -58,7 +58,7 @@ def _safe_load(loader) -> pd.DataFrame:
 
 def _safe_llm_client():
     try:
-        return get_llm_client()
+        return get_llm_client("BacktestAnalysisAgent")
     except Exception:
         return DisabledLLMClient()
 

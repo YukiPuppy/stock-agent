@@ -10,9 +10,11 @@ from src.pipeline import run_daily_review_agent as pipeline
 class FakeLLMClient:
     def __init__(self):
         self.prompts: list[str] = []
+        self.generate_kwargs: list[dict] = []
 
-    def generate(self, prompt: str) -> str:
+    def generate(self, prompt: str, *args, **kwargs) -> str:
         self.prompts.append(prompt)
+        self.generate_kwargs.append(dict(kwargs))
         return "## 一、当日执行总体评价\nFake Daily Review"
 
 
@@ -60,7 +62,12 @@ def test_run_daily_review_agent_pipeline_uses_fake_llm_client(tmp_path, monkeypa
         )
     )
     fake_client = FakeLLMClient()
-    monkeypatch.setattr(pipeline, "get_llm_client", lambda: fake_client)
+    client_calls = []
+    monkeypatch.setattr(
+        pipeline,
+        "get_llm_client",
+        lambda *args, **kwargs: client_calls.append((args, kwargs)) or fake_client,
+    )
 
     output_path = pipeline.run_daily_review_agent_pipeline(
         trade_date="2026-01-02",
@@ -72,13 +79,20 @@ def test_run_daily_review_agent_pipeline_uses_fake_llm_client(tmp_path, monkeypa
     assert output_path == str(output_dir / "llm_daily_review_2026-01-04.md")
     content = Path(output_path).read_text(encoding="utf-8")
     assert content.startswith("## 一、当日执行总体评价")
+    assert "Fake Daily Review" in content
+    assert client_calls == [(("DailyReviewAgent",), {})]
     assert fake_client.prompts
+    assert fake_client.generate_kwargs == [{}]
     assert "600000" in fake_client.prompts[0]
     assert "000001" not in fake_client.prompts[0]
     assert "off_plan" in fake_client.prompts[0]
 
 
 def test_safe_llm_client_falls_back_to_disabled(monkeypatch):
-    monkeypatch.setattr(pipeline, "get_llm_client", lambda: (_ for _ in ()).throw(ValueError("bad config")))
+    monkeypatch.setattr(
+        pipeline,
+        "get_llm_client",
+        lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("bad config")),
+    )
 
     assert pipeline._safe_llm_client().__class__.__name__ == "DisabledLLMClient"

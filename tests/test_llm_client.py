@@ -5,7 +5,7 @@ import urllib.error
 
 import pytest
 
-from src.agents.llm_client import DeepSeekClient, DisabledLLMClient, get_llm_client
+from src.agents.llm_client import DeepSeekClient, DisabledLLMClient, get_llm_client, resolve_llm_model
 from src.config import settings
 
 
@@ -41,6 +41,7 @@ def test_get_llm_client_raises_for_unimplemented_provider(monkeypatch):
 def test_get_llm_client_returns_deepseek_when_enabled(monkeypatch):
     monkeypatch.setattr(settings, "ENABLE_LLM_REPORT_AGENT", True)
     monkeypatch.setattr(settings, "LLM_PROVIDER", "deepseek")
+    monkeypatch.setattr(settings, "DEFAULT_LLM_MODEL", "")
     monkeypatch.setattr(settings, "LLM_MODEL", "deepseek-v4-flash")
     monkeypatch.setattr(settings, "LLM_API_KEY", "test-key")
     monkeypatch.setattr(settings, "LLM_BASE_URL", "")
@@ -49,7 +50,70 @@ def test_get_llm_client_returns_deepseek_when_enabled(monkeypatch):
     client = get_llm_client()
 
     assert isinstance(client, DeepSeekClient)
+    assert client.model == "deepseek-v4-flash"
     assert client.base_url == "https://api.deepseek.com"
+
+
+def test_resolve_llm_model_uses_agent_model_before_defaults(monkeypatch):
+    monkeypatch.setattr(settings, "REPORT_AGENT_MODEL", "report-model")
+    monkeypatch.setattr(settings, "DEFAULT_LLM_MODEL", "default-model")
+    monkeypatch.setattr(settings, "LLM_MODEL", "legacy-model")
+
+    assert resolve_llm_model("ReportAgent") == "report-model"
+
+
+def test_resolve_llm_model_uses_default_before_legacy(monkeypatch):
+    monkeypatch.setattr(settings, "REPORT_AGENT_MODEL", "")
+    monkeypatch.setattr(settings, "DEFAULT_LLM_MODEL", "default-model")
+    monkeypatch.setattr(settings, "LLM_MODEL", "legacy-model")
+
+    assert resolve_llm_model("ReportAgent") == "default-model"
+
+
+def test_resolve_llm_model_keeps_legacy_llm_model_fallback(monkeypatch):
+    monkeypatch.setattr(settings, "REPORT_AGENT_MODEL", "")
+    monkeypatch.setattr(settings, "DEFAULT_LLM_MODEL", "")
+    monkeypatch.setattr(settings, "LLM_MODEL", "legacy-model")
+
+    assert resolve_llm_model("ReportAgent") == "legacy-model"
+
+
+def test_resolve_llm_model_defaults_to_flash(monkeypatch):
+    monkeypatch.setattr(settings, "REPORT_AGENT_MODEL", "")
+    monkeypatch.setattr(settings, "DEFAULT_LLM_MODEL", "")
+    monkeypatch.setattr(settings, "LLM_MODEL", "")
+
+    assert resolve_llm_model("ReportAgent") == "deepseek-v4-flash"
+
+
+def test_resolve_llm_model_defaults_risk_and_research_agents_to_pro(monkeypatch):
+    monkeypatch.setattr(settings, "RISK_REVIEW_AGENT_MODEL", "")
+    monkeypatch.setattr(settings, "DEFAULT_LLM_MODEL", "")
+    monkeypatch.setattr(settings, "LLM_MODEL", "")
+
+    assert resolve_llm_model("RiskReviewAgent") == "deepseek-v4-pro"
+
+
+@pytest.mark.parametrize(
+    ("agent_name", "env_name", "expected_model"),
+    [
+        ("ReportAgent", "REPORT_AGENT_MODEL", "deepseek-v4-flash"),
+        ("MarketRegimeAgent", "MARKET_REGIME_AGENT_MODEL", "deepseek-v4-flash"),
+        ("IndustryInsightAgent", "INDUSTRY_INSIGHT_AGENT_MODEL", "deepseek-v4-flash"),
+        ("FactorInsightAgent", "FACTOR_INSIGHT_AGENT_MODEL", "deepseek-v4-flash"),
+        ("DailyReviewAgent", "DAILY_REVIEW_AGENT_MODEL", "deepseek-v4-flash"),
+        ("RiskReviewAgent", "RISK_REVIEW_AGENT_MODEL", "deepseek-v4-pro"),
+        ("BacktestAnalysisAgent", "BACKTEST_ANALYSIS_AGENT_MODEL", "deepseek-v4-pro"),
+        ("StrategyResearchAgent", "STRATEGY_RESEARCH_AGENT_MODEL", "deepseek-v4-pro"),
+        ("ParameterIterationAgent", "PARAMETER_ITERATION_AGENT_MODEL", "deepseek-v4-pro"),
+    ],
+)
+def test_resolve_llm_model_reads_each_agent_specific_model(monkeypatch, agent_name, env_name, expected_model):
+    monkeypatch.setattr(settings, "DEFAULT_LLM_MODEL", "default-model")
+    monkeypatch.setattr(settings, "LLM_MODEL", "legacy-model")
+    monkeypatch.setattr(settings, env_name, expected_model)
+
+    assert resolve_llm_model(agent_name) == expected_model
 
 
 def test_deepseek_client_requires_api_key():

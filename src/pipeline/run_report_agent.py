@@ -31,7 +31,7 @@ def run_report_agent_pipeline(
     trade_plan = _safe_load(lambda: store.load_trade_plan(trade_date=report_date))
     candidate_pool = _safe_load(lambda: store.load_candidate_pool(trade_date=report_date))
 
-    llm_client = get_llm_client()
+    llm_client = get_llm_client("ReportAgent")
     markdown = run_report_agent(
         llm_client,
         system_health=system_health,

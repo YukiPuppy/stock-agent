@@ -1,0 +1,110 @@
+[
+  {
+    "name": "ReportAgent",
+    "category": "reporting",
+    "level": "summary",
+    "workflow": "daily_ops,llm_agents",
+    "default_model_env": "REPORT_AGENT_MODEL",
+    "fallback_model_env": "DEFAULT_LLM_MODEL",
+    "frequency": "daily_after_market",
+    "permission": "read_only",
+    "output_pattern": "reports/llm_report_summary_*.md",
+    "description": "汇总系统健康、数据质量、策略研究和日度计划结果，只输出中文 Markdown 总结。"
+  },
+  {
+    "name": "RiskReviewAgent",
+    "category": "risk",
+    "level": "review",
+    "workflow": "daily_ops,llm_agents",
+    "default_model_env": "RISK_REVIEW_AGENT_MODEL",
+    "fallback_model_env": "DEFAULT_LLM_MODEL",
+    "frequency": "daily_after_market",
+    "permission": "read_only",
+    "output_pattern": "reports/llm_risk_review_*.md",
+    "description": "审查日度计划、候选池和系统状态中的风险，不生成交易指令。"
+  },
+  {
+    "name": "DailyReviewAgent",
+    "category": "review",
+    "level": "execution_review",
+    "workflow": "daily_ops,llm_agents",
+    "default_model_env": "DAILY_REVIEW_AGENT_MODEL",
+    "fallback_model_env": "DEFAULT_LLM_MODEL",
+    "frequency": "daily_after_close",
+    "permission": "read_only",
+    "output_pattern": "reports/llm_daily_review_*.md",
+    "description": "基于成交记录、持仓和日度复盘数据生成执行复盘报告。"
+  },
+  {
+    "name": "MarketRegimeAgent",
+    "category": "market",
+    "level": "context",
+    "workflow": "factor_build,llm_agents",
+    "default_model_env": "MARKET_REGIME_AGENT_MODEL",
+    "fallback_model_env": "DEFAULT_LLM_MODEL",
+    "frequency": "daily_after_factor_build",
+    "permission": "read_only",
+    "output_pattern": "reports/llm_market_regime_*.md",
+    "description": "解释市场环境状态和候选池暴露，提供市场背景风险提示。"
+  },
+  {
+    "name": "IndustryInsightAgent",
+    "category": "industry",
+    "level": "context",
+    "workflow": "factor_build,llm_agents",
+    "default_model_env": "INDUSTRY_INSIGHT_AGENT_MODEL",
+    "fallback_model_env": "DEFAULT_LLM_MODEL",
+    "frequency": "daily_after_factor_build",
+    "permission": "read_only",
+    "output_pattern": "reports/llm_industry_insight_*.md",
+    "description": "解释行业强弱、候选池行业分布和行业集中风险。"
+  },
+  {
+    "name": "FactorInsightAgent",
+    "category": "factor",
+    "level": "diagnostic",
+    "workflow": "factor_build,llm_agents",
+    "default_model_env": "FACTOR_INSIGHT_AGENT_MODEL",
+    "fallback_model_env": "DEFAULT_LLM_MODEL",
+    "frequency": "daily_after_factor_build",
+    "permission": "read_only",
+    "output_pattern": "reports/llm_factor_insight_*.md",
+    "description": "解释因子诊断、候选池因子暴露和因子质量风险。"
+  },
+  {
+    "name": "BacktestAnalysisAgent",
+    "category": "research",
+    "level": "analysis",
+    "workflow": "strategy_ops,llm_agents",
+    "default_model_env": "BACKTEST_ANALYSIS_AGENT_MODEL",
+    "fallback_model_env": "DEFAULT_LLM_MODEL",
+    "frequency": "on_research_run",
+    "permission": "read_only",
+    "output_pattern": "reports/llm_backtest_analysis_*.md",
+    "description": "总结策略回测、样本外验证和交易计划级回测结果。"
+  },
+  {
+    "name": "StrategyResearchAgent",
+    "category": "research",
+    "level": "proposal",
+    "workflow": "strategy_ops,llm_agents",
+    "default_model_env": "STRATEGY_RESEARCH_AGENT_MODEL",
+    "fallback_model_env": "DEFAULT_LLM_MODEL",
+    "frequency": "on_research_run",
+    "permission": "proposal_only",
+    "output_pattern": "reports/llm_strategy_research_*.md,reports/strategy_research_suggestions_*.json",
+    "description": "提出下一轮策略研究假设和候选建议，只生成需人工复核的候选输出。"
+  },
+  {
+    "name": "ParameterIterationAgent",
+    "category": "research",
+    "level": "proposal",
+    "workflow": "strategy_ops,llm_agents",
+    "default_model_env": "PARAMETER_ITERATION_AGENT_MODEL",
+    "fallback_model_env": "DEFAULT_LLM_MODEL",
+    "frequency": "on_research_run",
+    "permission": "proposal_only",
+    "output_pattern": "reports/llm_parameter_iteration_*.md,reports/parameter_search_space_candidate_*.json",
+    "description": "提出下一轮参数搜索空间候选，只生成需人工复核的 candidate JSON。"
+  }
+]

@@ -10,9 +10,11 @@ from src.pipeline import run_industry_insight_agent as pipeline
 class FakeLLMClient:
     def __init__(self):
         self.prompts: list[str] = []
+        self.generate_kwargs: list[dict] = []
 
-    def generate(self, prompt: str) -> str:
+    def generate(self, prompt: str, *args, **kwargs) -> str:
         self.prompts.append(prompt)
+        self.generate_kwargs.append(dict(kwargs))
         return "## 一、行业强弱总体判断\nFake Industry Insight"
 
 
@@ -62,7 +64,12 @@ def test_run_industry_insight_agent_pipeline_uses_fake_llm_client(tmp_path, monk
         )
     )
     fake_client = FakeLLMClient()
-    monkeypatch.setattr(pipeline, "get_llm_client", lambda: fake_client)
+    client_calls = []
+    monkeypatch.setattr(
+        pipeline,
+        "get_llm_client",
+        lambda *args, **kwargs: client_calls.append((args, kwargs)) or fake_client,
+    )
 
     output_path = pipeline.run_industry_insight_agent_pipeline(
         db_path=str(db_path),
@@ -72,12 +79,19 @@ def test_run_industry_insight_agent_pipeline_uses_fake_llm_client(tmp_path, monk
 
     content = Path(output_path).read_text(encoding="utf-8")
     assert content.startswith("## 一、行业强弱总体判断")
+    assert "Fake Industry Insight" in content
+    assert client_calls == [(("IndustryInsightAgent",), {})]
     assert fake_client.prompts
+    assert fake_client.generate_kwargs == [{}]
     assert "801780.SI" in fake_client.prompts[0]
     assert "strong_industry" in fake_client.prompts[0]
 
 
 def test_safe_llm_client_falls_back_to_disabled(monkeypatch):
-    monkeypatch.setattr(pipeline, "get_llm_client", lambda: (_ for _ in ()).throw(ValueError("bad config")))
+    monkeypatch.setattr(
+        pipeline,
+        "get_llm_client",
+        lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("bad config")),
+    )
 
     assert pipeline._safe_llm_client().__class__.__name__ == "DisabledLLMClient"

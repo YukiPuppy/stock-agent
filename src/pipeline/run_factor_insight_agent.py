@@ -76,7 +76,7 @@ def _safe_save_factor_diagnostics(store: StockAgentStore, df: pd.DataFrame) -> N
 
 def _safe_llm_client():
     try:
-        return get_llm_client()
+        return get_llm_client("FactorInsightAgent")
     except Exception:
         return DisabledLLMClient()
 

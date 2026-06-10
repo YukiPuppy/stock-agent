@@ -7,6 +7,7 @@ from typing import Callable
 
 import pandas as pd
 
+from src.agents.llm_client import resolve_llm_model
 from src.config import settings
 from src.config import units
 from src.database.duckdb_store import StockAgentStore
@@ -483,7 +484,9 @@ def _check_data_source_config() -> pd.DataFrame:
 def _check_llm_config() -> pd.DataFrame:
     enabled = bool(getattr(settings, "ENABLE_LLM_REPORT_AGENT", False))
     provider = str(getattr(settings, "LLM_PROVIDER", "none") or "").strip().lower()
-    model = str(getattr(settings, "LLM_MODEL", "") or "").strip()
+    default_model = str(getattr(settings, "DEFAULT_LLM_MODEL", "") or "").strip()
+    legacy_model = str(getattr(settings, "LLM_MODEL", "") or "").strip()
+    model = resolve_llm_model("ReportAgent")
     base_url = str(getattr(settings, "LLM_BASE_URL", "") or "").strip()
     api_key_configured = bool(str(getattr(settings, "LLM_API_KEY", "") or "").strip())
     timeout_seconds = int(getattr(settings, "LLM_TIMEOUT_SECONDS", 60) or 60)
@@ -498,7 +501,9 @@ def _check_llm_config() -> pd.DataFrame:
             {
                 "ENABLE_LLM_REPORT_AGENT": enabled,
                 "LLM_PROVIDER": provider,
+                "DEFAULT_LLM_MODEL": default_model,
                 "LLM_MODEL": model,
+                "legacy_LLM_MODEL": legacy_model,
                 "LLM_DISABLE_PROXY": llm_disable_proxy,
                 "LLM_API_KEY_configured": api_key_configured,
                 "enable_llm_report_agent": enabled,
@@ -515,7 +520,9 @@ def _check_llm_config() -> pd.DataFrame:
         columns=[
             "ENABLE_LLM_REPORT_AGENT",
             "LLM_PROVIDER",
+            "DEFAULT_LLM_MODEL",
             "LLM_MODEL",
+            "legacy_LLM_MODEL",
             "LLM_DISABLE_PROXY",
             "LLM_API_KEY_configured",
             "enable_llm_report_agent",
