@@ -26,13 +26,19 @@ def run_oos_validation(
     db_path: str | None = None,
     min_valid_count_train: int = 30,
     min_valid_count_validation: int = 10,
+    limit_strategies: int | None = None,
+    limit_param_combinations: int | None = None,
 ) -> pd.DataFrame:
     resolved_db_path = _resolve_db_path(db_path)
     store = StockAgentStore(resolved_db_path)
-    daily_factors = store.load_daily_factors()
-    daily_bars = store.load_daily_bars()
+    daily_factors = store.load_daily_factors(start_date=train_start_date, end_date=validation_end_date)
+    daily_bars = store.load_daily_bars(start_date=train_start_date, end_date=validation_end_date)
     config = load_parameter_search_space(config_path)
-    versions = generate_search_versions(config)
+    versions = generate_search_versions(
+        config,
+        limit_strategies=limit_strategies,
+        limit_param_combinations=limit_param_combinations,
+    )
 
     validation = validate_strategy_versions_out_of_sample(
         daily_factors=daily_factors,
@@ -58,13 +64,19 @@ def _run_and_report(
     db_path: str | None = None,
     min_valid_count_train: int = 30,
     min_valid_count_validation: int = 10,
+    limit_strategies: int | None = None,
+    limit_param_combinations: int | None = None,
 ) -> tuple[pd.DataFrame, int, int, int, str]:
     resolved_db_path = _resolve_db_path(db_path)
     store = StockAgentStore(resolved_db_path)
-    daily_factors = store.load_daily_factors()
-    daily_bars = store.load_daily_bars()
+    daily_factors = store.load_daily_factors(start_date=train_start_date, end_date=validation_end_date)
+    daily_bars = store.load_daily_bars(start_date=train_start_date, end_date=validation_end_date)
     config = load_parameter_search_space(config_path)
-    versions = generate_search_versions(config)
+    versions = generate_search_versions(
+        config,
+        limit_strategies=limit_strategies,
+        limit_param_combinations=limit_param_combinations,
+    )
 
     validation = validate_strategy_versions_out_of_sample(
         daily_factors=daily_factors,
@@ -91,6 +103,8 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--db-path", default=None)
     parser.add_argument("--min-valid-count-train", type=int, default=30)
     parser.add_argument("--min-valid-count-validation", type=int, default=10)
+    parser.add_argument("--limit-strategies", type=int, default=None)
+    parser.add_argument("--limit-param-combinations", type=int, default=None)
     return parser.parse_args(argv)
 
 
@@ -105,6 +119,8 @@ def main(argv: Sequence[str] | None = None) -> None:
         db_path=args.db_path,
         min_valid_count_train=args.min_valid_count_train,
         min_valid_count_validation=args.min_valid_count_validation,
+        limit_strategies=args.limit_strategies,
+        limit_param_combinations=args.limit_param_combinations,
     )
 
     print(f"daily_factors 行数: {daily_factors_count}")

@@ -924,6 +924,39 @@ def test_save_and_load_daily_factors(tmp_path):
     assert len(filtered) == 2
 
 
+def test_load_daily_factors_filters_by_date_range(tmp_path):
+    store = StockAgentStore(str(tmp_path / "stock_agent.duckdb"))
+    store.save_daily_factors(
+        pd.DataFrame(
+            {
+                "trade_date": ["20260101", "20260102", "20260103"],
+                "code": ["600000", "600000", "600000"],
+                "close": [10.0, 11.0, 12.0],
+                "pct_chg_1d": [0.01, 0.02, 0.03],
+                "pct_chg_3d": [None, None, None],
+                "pct_chg_5d": [None, None, None],
+                "pct_chg_10d": [None, None, None],
+                "ma5": [10.0, 10.0, 10.0],
+                "ma10": [10.0, 10.0, 10.0],
+                "ma20": [10.0, 10.0, 10.0],
+                "volume_ma5": [1000.0, 1000.0, 1000.0],
+                "amount_ma5": [10000.0, 10000.0, 10000.0],
+                "volume_ratio_5": [1.0, 1.0, 1.0],
+                "high_20": [11.0, 11.0, 11.0],
+                "low_20": [9.0, 9.0, 9.0],
+                "close_position_20": [0.75, 0.75, 0.75],
+                "above_ma5": [True, True, True],
+                "above_ma10": [True, True, True],
+                "above_ma20": [True, True, True],
+            }
+        )
+    )
+
+    result = store.load_daily_factors(start_date="20260102", end_date="20260103")
+
+    assert result["trade_date"].tolist() == ["20260102", "20260103"]
+
+
 def test_daily_factors_duplicate_trade_date_and_code_is_overwritten(tmp_path):
     store = StockAgentStore(str(tmp_path / "stock_agent.duckdb"))
     base = pd.DataFrame(
@@ -1062,6 +1095,27 @@ def test_save_and_load_strategy_signals(tmp_path):
 
     filtered = store.load_strategy_signals(trade_date="20260102")
     assert len(filtered) == 2
+
+
+def test_load_strategy_signals_filters_by_date_range(tmp_path):
+    store = StockAgentStore(str(tmp_path / "stock_agent.duckdb"))
+    store.save_strategy_signals(
+        pd.DataFrame(
+            {
+                "trade_date": ["20260101", "20260102", "20260103"],
+                "code": ["600000", "600000", "600000"],
+                "strategy_name": ["trend_pullback", "trend_pullback", "trend_pullback"],
+                "strategy_version": ["v1", "v1", "v1"],
+                "signal_strength": [10.0, 20.0, 30.0],
+                "entry_reason": ["a", "b", "c"],
+                "risk_flags": ["", "", ""],
+            }
+        )
+    )
+
+    result = store.load_strategy_signals(start_date="20260102", end_date="20260103")
+
+    assert result["trade_date"].tolist() == ["20260102", "20260103"]
 
 
 def test_strategy_signals_duplicate_key_is_overwritten(tmp_path):

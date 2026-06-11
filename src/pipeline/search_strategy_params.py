@@ -28,13 +28,19 @@ def run_parameter_search(
     min_win_rate_3d: float = 0.50,
     min_avg_return_3d: float = 0.0,
     max_avg_drawdown_3d: float = -0.08,
+    limit_strategies: int | None = None,
+    limit_param_combinations: int | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     resolved_db_path = _resolve_db_path(db_path)
     store = StockAgentStore(resolved_db_path)
-    daily_factors = store.load_daily_factors()
-    daily_bars = store.load_daily_bars()
+    daily_factors = store.load_daily_factors(start_date=start_date, end_date=end_date)
+    daily_bars = store.load_daily_bars(start_date=start_date, end_date=end_date)
     config = load_parameter_search_space(config_path)
-    versions = generate_search_versions(config)
+    versions = generate_search_versions(
+        config,
+        limit_strategies=limit_strategies,
+        limit_param_combinations=limit_param_combinations,
+    )
 
     historical_signals = generate_historical_signals_for_versions(
         daily_factors=daily_factors,
@@ -68,13 +74,19 @@ def _run_and_report(
     min_win_rate_3d: float = 0.50,
     min_avg_return_3d: float = 0.0,
     max_avg_drawdown_3d: float = -0.08,
+    limit_strategies: int | None = None,
+    limit_param_combinations: int | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, int, int, int, int, str]:
     resolved_db_path = _resolve_db_path(db_path)
     store = StockAgentStore(resolved_db_path)
-    daily_factors = store.load_daily_factors()
-    daily_bars = store.load_daily_bars()
+    daily_factors = store.load_daily_factors(start_date=start_date, end_date=end_date)
+    daily_bars = store.load_daily_bars(start_date=start_date, end_date=end_date)
     config = load_parameter_search_space(config_path)
-    versions = generate_search_versions(config)
+    versions = generate_search_versions(
+        config,
+        limit_strategies=limit_strategies,
+        limit_param_combinations=limit_param_combinations,
+    )
 
     historical_signals = generate_historical_signals_for_versions(
         daily_factors=daily_factors,
@@ -118,6 +130,8 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--min-win-rate-3d", type=float, default=0.50)
     parser.add_argument("--min-avg-return-3d", type=float, default=0.0)
     parser.add_argument("--max-avg-drawdown-3d", type=float, default=-0.08)
+    parser.add_argument("--limit-strategies", type=int, default=None)
+    parser.add_argument("--limit-param-combinations", type=int, default=None)
     return parser.parse_args(argv)
 
 
@@ -141,6 +155,8 @@ def main(argv: Sequence[str] | None = None) -> None:
         min_win_rate_3d=args.min_win_rate_3d,
         min_avg_return_3d=args.min_avg_return_3d,
         max_avg_drawdown_3d=args.max_avg_drawdown_3d,
+        limit_strategies=args.limit_strategies,
+        limit_param_combinations=args.limit_param_combinations,
     )
 
     print(f"daily_factors 行数: {daily_factors_count}")

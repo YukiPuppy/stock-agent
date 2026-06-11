@@ -17,6 +17,8 @@ def _resolve_db_path(db_path: str | None) -> str:
 
 def run_trade_plan_backtest(
     db_path: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
     top_n: int = 20,
     max_plan_items: int = 5,
     min_amount_ma5: float = 0.0,
@@ -24,9 +26,9 @@ def run_trade_plan_backtest(
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     resolved_db_path = _resolve_db_path(db_path)
     store = StockAgentStore(resolved_db_path)
-    strategy_signals = store.load_strategy_signals()
-    daily_factors = store.load_daily_factors()
-    daily_bars = store.load_daily_bars()
+    strategy_signals = store.load_strategy_signals(start_date=start_date, end_date=end_date)
+    daily_factors = store.load_daily_factors(start_date=start_date, end_date=end_date)
+    daily_bars = store.load_daily_bars(start_date=start_date, end_date=end_date)
     stock_basic = store.load_stock_basic()
     try:
         strategy_evaluation = store.load_strategy_version_evaluation()
@@ -58,6 +60,8 @@ def run_trade_plan_backtest(
 
 def _run_and_report(
     db_path: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
     top_n: int = 20,
     max_plan_items: int = 5,
     min_amount_ma5: float = 0.0,
@@ -65,11 +69,13 @@ def _run_and_report(
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, dict[str, int]]:
     resolved_db_path = _resolve_db_path(db_path)
     store = StockAgentStore(resolved_db_path)
-    strategy_signals = store.load_strategy_signals()
-    daily_factors = store.load_daily_factors()
-    daily_bars = store.load_daily_bars()
+    strategy_signals = store.load_strategy_signals(start_date=start_date, end_date=end_date)
+    daily_factors = store.load_daily_factors(start_date=start_date, end_date=end_date)
+    daily_bars = store.load_daily_bars(start_date=start_date, end_date=end_date)
     historical_trade_plans, backtest_results, performance = run_trade_plan_backtest(
         db_path=resolved_db_path,
+        start_date=start_date,
+        end_date=end_date,
         top_n=top_n,
         max_plan_items=max_plan_items,
         min_amount_ma5=min_amount_ma5,
@@ -86,6 +92,8 @@ def _run_and_report(
 def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Backtest generated trade plans with deterministic rules.")
     parser.add_argument("--db-path", default=None)
+    parser.add_argument("--start-date", default=None)
+    parser.add_argument("--end-date", default=None)
     parser.add_argument("--top-n", type=int, default=20)
     parser.add_argument("--max-plan-items", type=int, default=5)
     parser.add_argument(
@@ -102,6 +110,8 @@ def main(argv: Sequence[str] | None = None) -> None:
     args = _parse_args(argv)
     historical_trade_plans, backtest_results, performance, counts = _run_and_report(
         db_path=args.db_path,
+        start_date=args.start_date,
+        end_date=args.end_date,
         top_n=args.top_n,
         max_plan_items=args.max_plan_items,
         min_amount_ma5=args.min_amount_ma5,

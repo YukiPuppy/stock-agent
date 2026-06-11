@@ -142,7 +142,9 @@ def test_step_failure_records_error_and_continues(tmp_path, monkeypatch):
     assert summary["success_count"] == 5
     assert summary["failed_count"] == 1
     assert summary["skipped_count"] == 0
-    assert summary["errors"] == [{"step_name": "run_strategy_research_workflow", "error": "strategy failed"}]
+    assert summary["errors"][0]["step_name"] == "run_strategy_research_workflow"
+    assert summary["errors"][0]["error"] == "strategy failed"
+    assert "RuntimeError: strategy failed" in summary["errors"][0]["traceback"]
 
 
 def test_generates_strategy_ops_markdown_report(tmp_path, monkeypatch):
@@ -161,3 +163,100 @@ def test_generates_strategy_ops_markdown_report(tmp_path, monkeypatch):
     assert "run_factor_build_workflow" in content
     assert "strategy_research_suggestions JSON 路径" in content
     assert "parameter_search_space_candidate JSON 路径" in content
+
+
+def test_outputs_step_level_logs(tmp_path, monkeypatch, capsys):
+    calls = []
+    _patch_successful_steps(monkeypatch, calls)
+
+    workflow.run_strategy_ops_workflow(
+        db_path="test.duckdb",
+        output_dir=str(tmp_path),
+        build_factors=False,
+        run_strategy_research=False,
+        run_backtest_analysis_agent=False,
+        run_strategy_research_agent=False,
+        run_parameter_iteration_agent=False,
+        run_health_check=False,
+    )
+
+    output = capsys.readouterr().out
+    assert "[start] run_factor_build_workflow" in output
+    assert "[start] run_strategy_research_workflow" in output
+    assert "[success]" not in output
+
+
+def test_outputs_success_and_failed_logs(tmp_path, monkeypatch, capsys):
+    calls = []
+    _patch_successful_steps(monkeypatch, calls)
+
+    def fail_strategy_research(**kwargs):
+        raise RuntimeError("strategy failed")
+
+    monkeypatch.setattr(workflow, "run_strategy_research_workflow", fail_strategy_research)
+
+    workflow.run_strategy_ops_workflow(
+        db_path="test.duckdb",
+        output_dir=str(tmp_path),
+        run_backtest_analysis_agent=False,
+        run_strategy_research_agent=False,
+        run_parameter_iteration_agent=False,
+        run_health_check=False,
+    )
+
+    output = capsys.readouterr().out
+    assert "[start] run_factor_build_workflow" in output
+    assert "[success] run_factor_build_workflow rows=0 elapsed=" in output
+    assert "[failed] run_strategy_research_workflow error=strategy failed elapsed=" in output
+
+
+def test_failure_still_generates_strategy_ops_report_with_traceback(tmp_path, monkeypatch):
+    calls = []
+    _patch_successful_steps(monkeypatch, calls)
+
+    def fail_strategy_research(**kwargs):
+        raise RuntimeError("strategy failed")
+
+    monkeypatch.setattr(workflow, "run_strategy_research_workflow", fail_strategy_research)
+
+    summary = workflow.run_strategy_ops_workflow(
+        db_path="test.duckdb",
+        output_dir=str(tmp_path),
+        run_backtest_analysis_agent=False,
+        run_strategy_research_agent=False,
+        run_parameter_iteration_agent=False,
+        run_health_check=False,
+    )
+
+    report_path = Path(summary["strategy_ops_report_path"])
+    content = report_path.read_text(encoding="utf-8")
+    assert report_path.is_file()
+    assert "success_count: 1" in content
+    assert "failed_count: 1" in content
+    assert "skipped_count: 4" in content
+    assert "run_strategy_research_workflow | failed" in content
+    assert "RuntimeError: strategy failed" in content
+
+
+def test_smoke_mode_limits_strategy_research_and_skips_expensive_steps(tmp_path, monkeypatch):
+    calls = []
+    _patch_successful_steps(monkeypatch, calls)
+
+    summary = workflow.run_strategy_ops_workflow(
+        train_start_date="2026-01-01",
+        train_end_date="2026-01-05",
+        db_path="test.duckdb",
+        output_dir=str(tmp_path),
+        mode="smoke",
+        limit_strategies=1,
+        limit_param_combinations=3,
+        skip_llm_agents=True,
+    )
+
+    strategy_kwargs = [kwargs for name, kwargs in calls if name == "strategy_research"][0]
+    assert strategy_kwargs["limit_strategies"] == 1
+    assert strategy_kwargs["limit_param_combinations"] == 3
+    assert summary["mode"] == "smoke"
+    assert summary["success_count"] == 1
+    assert summary["skipped_count"] == 5
+    assert [name for name, _ in calls] == ["strategy_research"]

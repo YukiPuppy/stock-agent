@@ -253,12 +253,15 @@ def test_workflow_passes_paths_and_config_parameters(monkeypatch):
         "end_date": "2024-12-01",
         "config_path": "configs/versions.json",
         "db_path": "custom.duckdb",
+        "limit_strategies": None,
     }
     assert _kwargs_for(calls, "parameter_search") == {
         "start_date": "2024-08-01",
         "end_date": "2024-08-31",
         "config_path": "configs/search.json",
         "db_path": "custom.duckdb",
+        "limit_strategies": None,
+        "limit_param_combinations": None,
     }
     assert _kwargs_for(calls, "oos_validation") == {
         "train_start_date": "2024-09-01",
@@ -267,11 +270,58 @@ def test_workflow_passes_paths_and_config_parameters(monkeypatch):
         "validation_end_date": "2025-01-10",
         "config_path": "configs/search.json",
         "db_path": "custom.duckdb",
+        "limit_strategies": None,
+        "limit_param_combinations": None,
+    }
+    assert _kwargs_for(calls, "trade_plan_backtest") == {
+        "db_path": "custom.duckdb",
+        "start_date": "2024-09-01",
+        "end_date": "2024-12-01",
     }
     assert _kwargs_for(calls, "strategy_admission") == {
         "db_path": "custom.duckdb",
         "export_candidate_config": True,
         "candidate_config_path": "configs/candidate.json",
+    }
+
+
+def test_workflow_passes_date_ranges_and_smoke_limits_to_data_loading_steps(monkeypatch):
+    calls = []
+    _patch_steps(monkeypatch, calls)
+
+    workflow.run_strategy_research_workflow(
+        db_path="custom.duckdb",
+        train_start_date="2026-01-01",
+        train_end_date="2026-01-31",
+        validation_start_date="2026-02-01",
+        validation_end_date="2026-02-15",
+        parameter_search_start_date="2026-01-05",
+        parameter_search_end_date="2026-01-20",
+        limit_strategies=1,
+        limit_param_combinations=3,
+        export_reports=False,
+    )
+
+    assert _kwargs_for(calls, "version_backtest") == {
+        "start_date": "2026-01-01",
+        "end_date": "2026-01-31",
+        "config_path": None,
+        "db_path": "custom.duckdb",
+        "limit_strategies": 1,
+    }
+    assert _kwargs_for(calls, "parameter_search") == {
+        "start_date": "2026-01-05",
+        "end_date": "2026-01-20",
+        "config_path": None,
+        "db_path": "custom.duckdb",
+        "limit_strategies": 1,
+        "limit_param_combinations": 3,
+    }
+    assert _kwargs_for(calls, "oos_validation")["limit_param_combinations"] == 3
+    assert _kwargs_for(calls, "trade_plan_backtest") == {
+        "db_path": "custom.duckdb",
+        "start_date": "2026-01-01",
+        "end_date": "2026-01-31",
     }
 
 

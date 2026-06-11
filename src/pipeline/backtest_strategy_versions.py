@@ -22,13 +22,16 @@ def run_strategy_version_backtest(
     end_date: str | None = None,
     config_path: str | None = None,
     db_path: str | None = None,
+    limit_strategies: int | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     resolved_db_path = _resolve_db_path(db_path)
     store = StockAgentStore(resolved_db_path)
-    daily_factors = store.load_daily_factors()
-    daily_bars = store.load_daily_bars()
+    daily_factors = store.load_daily_factors(start_date=start_date, end_date=end_date)
+    daily_bars = store.load_daily_bars(start_date=start_date, end_date=end_date)
     config = load_strategy_versions(config_path)
     versions = iter_strategy_versions(config)
+    if limit_strategies is not None:
+        versions = versions[: int(limit_strategies)]
 
     strategy_signals = generate_historical_signals_for_versions(
         daily_factors=daily_factors,
@@ -50,13 +53,16 @@ def _run_and_report(
     end_date: str | None = None,
     config_path: str | None = None,
     db_path: str | None = None,
+    limit_strategies: int | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame, int, int, int, int, str]:
     resolved_db_path = _resolve_db_path(db_path)
     store = StockAgentStore(resolved_db_path)
-    daily_factors = store.load_daily_factors()
-    daily_bars = store.load_daily_bars()
+    daily_factors = store.load_daily_factors(start_date=start_date, end_date=end_date)
+    daily_bars = store.load_daily_bars(start_date=start_date, end_date=end_date)
     config = load_strategy_versions(config_path)
     versions = iter_strategy_versions(config)
+    if limit_strategies is not None:
+        versions = versions[: int(limit_strategies)]
 
     strategy_signals = generate_historical_signals_for_versions(
         daily_factors=daily_factors,
@@ -87,6 +93,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--end-date", default=None)
     parser.add_argument("--config-path", default=None)
     parser.add_argument("--db-path", default=None)
+    parser.add_argument("--limit-strategies", type=int, default=None)
     return parser.parse_args()
 
 
@@ -105,6 +112,7 @@ def main() -> None:
         end_date=args.end_date,
         config_path=args.config_path,
         db_path=args.db_path,
+        limit_strategies=args.limit_strategies,
     )
 
     print(f"daily_factors 行数: {daily_factors_count}")

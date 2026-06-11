@@ -61,6 +61,8 @@ def run_strategy_research_workflow(
     export_reports: bool = True,
     export_candidate_config: bool = True,
     candidate_config_path: str = "configs/active_strategies_candidate.json",
+    limit_strategies: int | None = None,
+    limit_param_combinations: int | None = None,
 ) -> dict:
     """Run local research steps and return row counts plus exported artifact paths."""
     resolved_db_path = _resolve_db_path(db_path)
@@ -76,6 +78,7 @@ def run_strategy_research_workflow(
         end_date=train_end_date,
         config_path=strategy_versions_config_path,
         db_path=resolved_db_path,
+        limit_strategies=limit_strategies,
     )
     version_evaluation = run_strategy_version_evaluation(db_path=resolved_db_path)
 
@@ -84,6 +87,8 @@ def run_strategy_research_workflow(
         end_date=parameter_search_end_date,
         config_path=parameter_search_config_path,
         db_path=resolved_db_path,
+        limit_strategies=limit_strategies,
+        limit_param_combinations=limit_param_combinations,
     )
 
     walk_forward_validation = pd.DataFrame()
@@ -95,9 +100,15 @@ def run_strategy_research_workflow(
             validation_end_date=str(validation_end_date),
             config_path=parameter_search_config_path,
             db_path=resolved_db_path,
+            limit_strategies=limit_strategies,
+            limit_param_combinations=limit_param_combinations,
         )
 
-    _, trade_plan_backtest_results, trade_plan_performance = run_trade_plan_backtest(db_path=resolved_db_path)
+    _, trade_plan_backtest_results, trade_plan_performance = run_trade_plan_backtest(
+        db_path=resolved_db_path,
+        start_date=train_start_date,
+        end_date=train_end_date,
+    )
 
     admission = run_strategy_admission(
         db_path=resolved_db_path,
@@ -158,6 +169,8 @@ def run_strategy_research_workflow(
         "trade_plan_backtest_report_path": trade_plan_backtest_report_path,
         "strategy_admission_report_path": strategy_admission_report_path,
         "active_candidate_config_path": candidate_config_path if export_candidate_config else None,
+        "limit_strategies": limit_strategies,
+        "limit_param_combinations": limit_param_combinations,
     }
 
 
@@ -176,6 +189,8 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--no-report", action="store_true")
     parser.add_argument("--no-candidate-config", action="store_true")
     parser.add_argument("--candidate-config-path", default="configs/active_strategies_candidate.json")
+    parser.add_argument("--limit-strategies", type=int, default=None)
+    parser.add_argument("--limit-param-combinations", type=int, default=None)
     return parser.parse_args(argv)
 
 
@@ -195,6 +210,8 @@ def main(argv: Sequence[str] | None = None) -> None:
         export_reports=not args.no_report,
         export_candidate_config=not args.no_candidate_config,
         candidate_config_path=args.candidate_config_path,
+        limit_strategies=args.limit_strategies,
+        limit_param_combinations=args.limit_param_combinations,
     )
 
     print("Strategy research workflow finished.")

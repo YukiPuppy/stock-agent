@@ -91,10 +91,23 @@ def generate_param_combinations(strategy_name: str, strategy_config: dict) -> li
     return versions
 
 
-def generate_search_versions(search_space_config: dict) -> list[dict]:
+def generate_search_versions(
+    search_space_config: dict,
+    limit_strategies: int | None = None,
+    limit_param_combinations: int | None = None,
+) -> list[dict]:
     versions: list[dict] = []
+    strategy_count = 0
     for strategy_name, strategy_config in search_space_config.items():
         if not strategy_config.get("enabled", False):
             continue
-        versions.extend(generate_param_combinations(strategy_name, strategy_config))
+        strategy_count += 1
+        limited_config = deepcopy(strategy_config)
+        if limit_param_combinations is not None:
+            current_max = int(limited_config.get("max_combinations", 0) or 0)
+            limited_max = max(0, int(limit_param_combinations))
+            limited_config["max_combinations"] = limited_max if current_max <= 0 else min(current_max, limited_max)
+        versions.extend(generate_param_combinations(strategy_name, limited_config))
+        if limit_strategies is not None and strategy_count >= int(limit_strategies):
+            break
     return versions

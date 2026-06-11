@@ -90,3 +90,39 @@ def test_run_strategy_version_backtest_reads_duckdb_and_saves_performance(tmp_pa
     assert len(performance) == 1
     assert saved_performance.loc[0, "strategy_name"] == "trend_pullback"
     assert saved_performance.loc[0, "strategy_version"] == "v1"
+
+
+def test_run_strategy_version_backtest_passes_date_range_to_store(monkeypatch):
+    from src.pipeline import backtest_strategy_versions as pipeline
+
+    calls = []
+
+    class FakeStore:
+        def __init__(self, db_path):
+            self.db_path = db_path
+
+        def load_daily_factors(self, **kwargs):
+            calls.append(("load_daily_factors", kwargs))
+            return pd.DataFrame(columns=["trade_date"])
+
+        def load_daily_bars(self, **kwargs):
+            calls.append(("load_daily_bars", kwargs))
+            return pd.DataFrame()
+
+        def save_backtest_results(self, df):
+            calls.append(("save_backtest_results", len(df)))
+
+        def save_strategy_version_performance(self, df):
+            calls.append(("save_strategy_version_performance", len(df)))
+
+    monkeypatch.setattr(pipeline, "StockAgentStore", FakeStore)
+    monkeypatch.setattr(pipeline, "load_strategy_versions", lambda config_path=None: {"trend_pullback": []})
+
+    pipeline.run_strategy_version_backtest(
+        start_date="2026-01-01",
+        end_date="2026-01-31",
+        db_path="test.duckdb",
+    )
+
+    assert ("load_daily_factors", {"start_date": "2026-01-01", "end_date": "2026-01-31"}) in calls
+    assert ("load_daily_bars", {"start_date": "2026-01-01", "end_date": "2026-01-31"}) in calls

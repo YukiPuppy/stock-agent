@@ -4,6 +4,7 @@ import pandas as pd
 
 from src.database.duckdb_store import StockAgentStore
 from src.pipeline.search_strategy_params import run_parameter_search
+from src.research.parameter_search import generate_search_versions
 
 
 def test_run_parameter_search_generates_backtest_evaluation_and_saves(tmp_path):
@@ -92,3 +93,66 @@ def test_run_parameter_search_generates_backtest_evaluation_and_saves(tmp_path):
     assert len(store.load_parameter_search_backtest_results()) == 1
     assert len(store.load_parameter_search_performance()) == 1
     assert len(store.load_parameter_search_results()) == 1
+
+
+def test_run_parameter_search_passes_date_range_to_store_and_limits_versions(monkeypatch):
+    from src.pipeline import search_strategy_params as pipeline
+
+    calls = []
+
+    class FakeStore:
+        def __init__(self, db_path):
+            self.db_path = db_path
+
+        def load_daily_factors(self, **kwargs):
+            calls.append(("load_daily_factors", kwargs))
+            return pd.DataFrame(columns=["trade_date"])
+
+        def load_daily_bars(self, **kwargs):
+            calls.append(("load_daily_bars", kwargs))
+            return pd.DataFrame()
+
+        def save_parameter_search_backtest_results(self, df):
+            calls.append(("save_parameter_search_backtest_results", len(df)))
+
+        def save_parameter_search_performance(self, df):
+            calls.append(("save_parameter_search_performance", len(df)))
+
+        def save_parameter_search_results(self, df):
+            calls.append(("save_parameter_search_results", len(df)))
+
+    monkeypatch.setattr(pipeline, "StockAgentStore", FakeStore)
+    monkeypatch.setattr(
+        pipeline,
+        "load_parameter_search_space",
+        lambda config_path=None: {
+            "trend_pullback": {"enabled": True, "max_combinations": 10, "search_space": {"x": [1, 2, 3, 4]}},
+            "breakout_volume": {"enabled": True, "max_combinations": 10, "search_space": {"x": [1, 2, 3, 4]}},
+        },
+    )
+
+    _, _, evaluation = pipeline.run_parameter_search(
+        start_date="2026-01-01",
+        end_date="2026-01-31",
+        db_path="test.duckdb",
+        limit_strategies=1,
+        limit_param_combinations=3,
+    )
+
+    assert ("load_daily_factors", {"start_date": "2026-01-01", "end_date": "2026-01-31"}) in calls
+    assert ("load_daily_bars", {"start_date": "2026-01-01", "end_date": "2026-01-31"}) in calls
+    assert evaluation.empty
+
+
+def test_generate_search_versions_limits_strategy_count_and_param_combinations():
+    versions = generate_search_versions(
+        {
+            "trend_pullback": {"enabled": True, "max_combinations": 10, "search_space": {"x": [1, 2, 3, 4]}},
+            "breakout_volume": {"enabled": True, "max_combinations": 10, "search_space": {"x": [1, 2, 3, 4]}},
+        },
+        limit_strategies=1,
+        limit_param_combinations=3,
+    )
+
+    assert len(versions) == 3
+    assert {version["strategy_name"] for version in versions} == {"trend_pullback"}

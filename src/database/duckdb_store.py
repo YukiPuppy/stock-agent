@@ -490,12 +490,23 @@ class StockAgentStore:
     def save_moneyflow_factors(self, df: pd.DataFrame) -> None:
         self._save_extension_table(df, "moneyflow_factors", MONEYFLOW_FACTOR_COLUMNS, ["trade_date", "code"])
 
-    def load_moneyflow_factors(self, trade_date: str | None = None) -> pd.DataFrame:
+    def load_moneyflow_factors(
+        self,
+        trade_date: str | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> pd.DataFrame:
         conditions = []
         params = []
         if trade_date is not None:
             conditions.append("trade_date = ?")
             params.append(trade_date)
+        if start_date is not None:
+            conditions.append("trade_date >= ?")
+            params.append(start_date)
+        if end_date is not None:
+            conditions.append("trade_date <= ?")
+            params.append(end_date)
         return self._load_extension_table("moneyflow_factors", MONEYFLOW_FACTOR_COLUMNS, conditions, params)
 
     def save_market_regime(self, df: pd.DataFrame) -> None:
@@ -718,13 +729,25 @@ class StockAgentStore:
             finally:
                 con.unregister("incoming_daily_factors")
 
-    def load_daily_factors(self, trade_date: str | None = None) -> pd.DataFrame:
+    def load_daily_factors(
+        self,
+        trade_date: str | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> pd.DataFrame:
         self._ensure_parent_dir()
+        conditions = []
         params = []
-        where_clause = ""
         if trade_date is not None:
-            where_clause = "WHERE trade_date = ?"
+            conditions.append("trade_date = ?")
             params.append(trade_date)
+        if start_date is not None:
+            conditions.append("trade_date >= ?")
+            params.append(start_date)
+        if end_date is not None:
+            conditions.append("trade_date <= ?")
+            params.append(end_date)
+        where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
 
         query = f"""
             SELECT
@@ -1008,13 +1031,25 @@ class StockAgentStore:
             finally:
                 con.unregister("incoming_strategy_signals")
 
-    def load_strategy_signals(self, trade_date: str | None = None) -> pd.DataFrame:
+    def load_strategy_signals(
+        self,
+        trade_date: str | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> pd.DataFrame:
         self._ensure_parent_dir()
+        conditions = []
         params = []
-        where_clause = ""
         if trade_date is not None:
-            where_clause = "WHERE trade_date = ?"
+            conditions.append("trade_date = ?")
             params.append(trade_date)
+        if start_date is not None:
+            conditions.append("trade_date >= ?")
+            params.append(start_date)
+        if end_date is not None:
+            conditions.append("trade_date <= ?")
+            params.append(end_date)
+        where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
 
         query = f"""
             SELECT
