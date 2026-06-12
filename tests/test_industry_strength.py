@@ -28,8 +28,9 @@ def test_build_industry_strength_generates_score_and_level():
         )
 
     result = build_industry_strength(pd.DataFrame(rows))
-    latest = result[result["trade_date"] == "2025-01-06"].set_index("industry_code")
+    latest = result[result["trade_date"] == "20250106"].set_index("industry_code")
 
     assert "industry_strength_score" in result.columns
+    assert result["trade_date"].str.fullmatch(r"\d{8}").all()
     assert latest.loc["801010.SI", "industry_strength_level"] in {"strong", "neutral"}
     assert "weak_industry" in latest.loc["801020.SI", "industry_risk_flags"]

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 import pandas as pd
 
 from src.strategy.base_strategy import SIGNAL_COLUMNS, empty_signals
@@ -81,8 +83,26 @@ def generate_historical_signals_for_versions(
 
 def _trade_dates(daily_factors: pd.DataFrame, start_date: str | None, end_date: str | None) -> list[str]:
     trade_dates = daily_factors["trade_date"].dropna().astype(str).drop_duplicates().sort_values()
+    normalized_dates = trade_dates.map(_normalize_trade_date)
     if start_date is not None:
-        trade_dates = trade_dates[trade_dates >= start_date]
+        normalized_start = _normalize_trade_date(start_date)
+        trade_dates = trade_dates[normalized_dates >= normalized_start]
+        normalized_dates = normalized_dates[normalized_dates >= normalized_start]
     if end_date is not None:
-        trade_dates = trade_dates[trade_dates <= end_date]
+        normalized_end = _normalize_trade_date(end_date)
+        trade_dates = trade_dates[normalized_dates <= normalized_end]
+        normalized_dates = normalized_dates[normalized_dates <= normalized_end]
     return trade_dates.tolist()
+
+
+def _normalize_trade_date(value: object) -> str:
+    if value is None or pd.isna(value):
+        return ""
+    text = str(value).strip()
+    digits = re.sub(r"\D", "", text)
+    if len(digits) == 8:
+        return digits
+    parsed = pd.to_datetime(text, errors="coerce")
+    if pd.isna(parsed):
+        return ""
+    return parsed.strftime("%Y%m%d")

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 
 import pandas as pd
 
@@ -55,6 +56,7 @@ def enrich_daily_factors_with_extension_data(
         return _ensure_columns(result, DAILY_FACTOR_COLUMNS).loc[:, DAILY_FACTOR_COLUMNS]
 
     result = daily_factors.copy()
+    result = _normalize_merge_keys(result, trade_date=True, code=True)
     if daily_basic is not None and not daily_basic.empty:
         basic_columns = [
             "trade_date",
@@ -69,6 +71,7 @@ def enrich_daily_factors_with_extension_data(
         ]
         basic = _ensure_columns(daily_basic.copy(), basic_columns)
         basic = basic.loc[:, basic_columns].rename(columns={"volume_ratio": "volume_ratio_daily_basic"})
+        basic = _normalize_merge_keys(basic, trade_date=True, code=True)
         result = result.merge(
             basic.drop_duplicates(subset=["trade_date", "code"], keep="last"),
             on=["trade_date", "code"],
@@ -78,6 +81,7 @@ def enrich_daily_factors_with_extension_data(
     if stock_limits is not None and not stock_limits.empty:
         limit_columns = ["trade_date", "code", "up_limit", "down_limit"]
         limits = _ensure_columns(stock_limits.copy(), limit_columns).loc[:, limit_columns]
+        limits = _normalize_merge_keys(limits, trade_date=True, code=True)
         result = result.merge(
             limits.drop_duplicates(subset=["trade_date", "code"], keep="last"),
             on=["trade_date", "code"],
@@ -86,6 +90,7 @@ def enrich_daily_factors_with_extension_data(
 
     if suspend_daily is not None and not suspend_daily.empty:
         suspend = _ensure_columns(suspend_daily.copy(), ["trade_date", "code", "suspend_type"])
+        suspend = _normalize_merge_keys(suspend, trade_date=True, code=True)
         suspend["is_suspended"] = suspend["suspend_type"].fillna("").astype(str).eq("S")
         suspend_flag = (
             suspend.groupby(["trade_date", "code"], as_index=False)["is_suspended"]
@@ -107,6 +112,7 @@ def enrich_daily_factors_with_extension_data(
             "moneyflow_risk_flags",
         ]
         moneyflow = _ensure_columns(moneyflow_factors.copy(), moneyflow_columns).loc[:, moneyflow_columns]
+        moneyflow = _normalize_merge_keys(moneyflow, trade_date=True, code=True)
         result = result.merge(
             moneyflow.drop_duplicates(subset=["trade_date", "code"], keep="last"),
             on=["trade_date", "code"],
@@ -116,6 +122,7 @@ def enrich_daily_factors_with_extension_data(
     if stock_industry_map is not None and not stock_industry_map.empty:
         map_columns = ["code", "industry_code", "industry_name"]
         mapping = _ensure_columns(stock_industry_map.copy(), map_columns).loc[:, map_columns]
+        mapping = _normalize_merge_keys(mapping, code=True, industry_code=True)
         result = result.merge(
             mapping.drop_duplicates(subset=["code"], keep="last"),
             on="code",
@@ -134,6 +141,7 @@ def enrich_daily_factors_with_extension_data(
             "industry_risk_flags",
         ]
         strength = _ensure_columns(industry_strength.copy(), strength_columns).loc[:, strength_columns]
+        strength = _normalize_merge_keys(strength, trade_date=True, industry_code=True)
         result = result.merge(
             strength.drop_duplicates(subset=["trade_date", "industry_code"], keep="last"),
             on=["trade_date", "industry_code"],
@@ -215,6 +223,49 @@ def _ensure_columns(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
         if column not in df.columns:
             df[column] = None
     return df
+
+
+def _normalize_merge_keys(
+    df: pd.DataFrame,
+    *,
+    trade_date: bool = False,
+    code: bool = False,
+    industry_code: bool = False,
+) -> pd.DataFrame:
+    normalized = df.copy()
+    if trade_date and "trade_date" in normalized.columns:
+        normalized["trade_date"] = _normalize_trade_date_series(normalized["trade_date"])
+    if code and "code" in normalized.columns:
+        normalized["code"] = _normalize_stock_code_series(normalized["code"])
+    if industry_code and "industry_code" in normalized.columns:
+        normalized["industry_code"] = normalized["industry_code"].fillna("").astype(str).str.strip()
+    return normalized
+
+
+def _normalize_trade_date_series(series: pd.Series) -> pd.Series:
+    values = series.fillna("").astype(str).str.strip()
+    digits = values.str.replace(r"\D", "", regex=True)
+    normalized = digits.where(digits.str.len() == 8, "")
+    needs_parse = normalized.eq("") & values.ne("")
+    if needs_parse.any():
+        parsed = pd.to_datetime(values[needs_parse], errors="coerce")
+        normalized.loc[needs_parse] = parsed.dt.strftime("%Y%m%d").fillna("")
+    return normalized
+
+
+def _normalize_stock_code_series(series: pd.Series) -> pd.Series:
+    values = series.fillna("").astype(str).str.strip()
+    return values.map(_normalize_stock_code)
+
+
+def _normalize_stock_code(value: str) -> str:
+    match = re.search(r"\d{6}", value)
+    if match:
+        return match.group(0)
+    digits = re.sub(r"\D", "", value)
+    if digits:
+        return digits.zfill(6)[-6:]
+    return ""
 
 
 def _parse_args() -> argparse.Namespace:

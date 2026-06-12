@@ -647,6 +647,7 @@ def test_save_and_load_stock_basic(tmp_path):
             "name": ["浦发银行", "平安银行"],
             "market": ["SH", "SZ"],
             "board": ["main", "main"],
+            "industry": ["银行", "银行"],
             "list_status": ["L", "L"],
         }
     )
@@ -660,6 +661,7 @@ def test_save_and_load_stock_basic(tmp_path):
             "name": "平安银行",
             "market": "SZ",
             "board": "main",
+            "industry": "银行",
             "list_status": "L",
         },
         {
@@ -667,6 +669,7 @@ def test_save_and_load_stock_basic(tmp_path):
             "name": "浦发银行",
             "market": "SH",
             "board": "main",
+            "industry": "银行",
             "list_status": "L",
         },
     ]
@@ -681,6 +684,7 @@ def test_stock_basic_duplicate_code_is_overwritten(tmp_path):
                 "name": ["旧名称"],
                 "market": ["SH"],
                 "board": ["main"],
+                "industry": ["银行"],
                 "list_status": ["L"],
             }
         )
@@ -693,6 +697,7 @@ def test_stock_basic_duplicate_code_is_overwritten(tmp_path):
                 "name": ["新名称"],
                 "market": ["SH"],
                 "board": ["main"],
+                "industry": ["银行"],
                 "list_status": ["D"],
             }
         )
@@ -996,6 +1001,47 @@ def test_daily_factors_duplicate_trade_date_and_code_is_overwritten(tmp_path):
     assert result.loc[0, "close"] == 12.5
     assert result.loc[0, "pct_chg_1d"] == 0.25
     assert result.loc[0, "above_ma20"] == False
+
+
+def test_daily_factors_normalizes_keys_and_overwrites_legacy_date_format(tmp_path):
+    store = StockAgentStore(str(tmp_path / "stock_agent.duckdb"))
+    base = pd.DataFrame(
+        {
+            "trade_date": ["2026-01-02"],
+            "code": ["1.SZ"],
+            "close": [10.5],
+            "pct_chg_1d": [0.05],
+            "pct_chg_3d": [None],
+            "pct_chg_5d": [None],
+            "pct_chg_10d": [None],
+            "ma5": [10.0],
+            "ma10": [10.0],
+            "ma20": [10.0],
+            "volume_ma5": [1000.0],
+            "amount_ma5": [10000.0],
+            "volume_ratio_5": [1.0],
+            "high_20": [11.0],
+            "low_20": [9.0],
+            "close_position_20": [0.75],
+            "above_ma5": [True],
+            "above_ma10": [True],
+            "above_ma20": [True],
+        }
+    )
+    store.save_daily_factors(base)
+
+    updated = base.copy()
+    updated.loc[0, "trade_date"] = "20260102"
+    updated.loc[0, "code"] = "000001"
+    updated.loc[0, "close"] = 12.5
+    store.save_daily_factors(updated)
+
+    result = store.load_daily_factors()
+
+    assert len(result) == 1
+    assert result.loc[0, "trade_date"] == "20260102"
+    assert result.loc[0, "code"] == "000001"
+    assert result.loc[0, "close"] == 12.5
 
 
 def test_save_and_load_candidate_pool(tmp_path):

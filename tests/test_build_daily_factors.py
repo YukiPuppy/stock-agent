@@ -195,3 +195,65 @@ def test_build_daily_factors_merges_industry_strength(tmp_path):
     assert result.loc[0, "industry_name"] == "银行"
     assert result.loc[0, "industry_strength_score"] == 65
     assert result.loc[0, "industry_strength_level"] == "strong"
+
+
+def test_build_daily_factors_normalizes_keys_and_covers_most_industry_strength(tmp_path):
+    db_path = tmp_path / "stock_agent.duckdb"
+    store = StockAgentStore(str(db_path))
+    store.save_daily_bars(
+        pd.DataFrame(
+            {
+                "trade_date": ["20250102", "20250102", "20250102", "20250102"],
+                "code": ["1", "000002.SZ", "000003", "000004"],
+                "open": [10.0, 9.0, 8.0, 7.0],
+                "high": [10.5, 9.5, 8.5, 7.5],
+                "low": [9.8, 8.8, 7.8, 6.8],
+                "close": [10.2, 9.2, 8.2, 7.2],
+                "volume": [1000.0, 1000.0, 1000.0, 1000.0],
+                "amount": [10200.0, 9200.0, 8200.0, 7200.0],
+            }
+        )
+    )
+    store.save_stock_industry_map(
+        pd.DataFrame(
+            [
+                {"code": "000001.SZ", "industry_name": "银行", "industry_code": "801780.SI"},
+                {"code": "2", "industry_name": "地产", "industry_code": "801180.SI"},
+                {"code": "000003", "industry_name": "医药", "industry_code": "801150.SI"},
+            ]
+        )
+    )
+    store.save_industry_strength(
+        pd.DataFrame(
+            [
+                {
+                    "trade_date": "2025-01-02",
+                    "industry_code": "801780.SI",
+                    "industry_strength_score": 65,
+                    "industry_strength_level": "strong",
+                    "industry_return_5d": 0.03,
+                },
+                {
+                    "trade_date": "2025-01-02",
+                    "industry_code": "801180.SI",
+                    "industry_strength_score": 45,
+                    "industry_strength_level": "neutral",
+                    "industry_return_5d": 0.01,
+                },
+                {
+                    "trade_date": "2025-01-02",
+                    "industry_code": "801150.SI",
+                    "industry_strength_score": 35,
+                    "industry_strength_level": "neutral",
+                    "industry_return_5d": 0.02,
+                },
+            ]
+        )
+    )
+
+    result = build_daily_factors(db_path=str(db_path)).sort_values("code").reset_index(drop=True)
+
+    assert result["trade_date"].eq("20250102").all()
+    assert result["code"].tolist() == ["000001", "000002", "000003", "000004"]
+    assert result["industry_strength_score"].notna().mean() >= 0.75
+    assert result.loc[result["code"] == "000001", "industry_strength_level"].iloc[0] == "strong"

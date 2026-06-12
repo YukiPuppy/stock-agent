@@ -38,7 +38,7 @@ def build_industry_strength(sw_daily: pd.DataFrame) -> pd.DataFrame:
             data[column] = pd.NA
         data[column] = pd.to_numeric(data[column], errors="coerce")
 
-    data["trade_date"] = pd.to_datetime(data["trade_date"], errors="coerce").dt.strftime("%Y-%m-%d")
+    data["trade_date"] = pd.to_datetime(data["trade_date"], errors="coerce").dt.strftime("%Y%m%d")
     data = data.sort_values(["industry_code", "trade_date"]).reset_index(drop=True)
     grouped = data.groupby("industry_code", group_keys=False)
     data["industry_return_3d"] = grouped["close"].pct_change(periods=3)

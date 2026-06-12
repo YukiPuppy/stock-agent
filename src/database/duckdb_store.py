@@ -1,4 +1,5 @@
 from pathlib import Path
+import re
 
 import duckdb
 import pandas as pd
@@ -261,6 +262,69 @@ PROVIDER_COMPARE_RESULT_COLUMNS = [
 DATA_UNIT_METADATA_COLUMNS = ["key", "value", "updated_at"]
 
 
+def _normalize_daily_factor_keys(df: pd.DataFrame) -> pd.DataFrame:
+    normalized = df.copy()
+    if "trade_date" in normalized.columns:
+        normalized["trade_date"] = _normalize_trade_date_series(normalized["trade_date"])
+    if "code" in normalized.columns:
+        normalized["code"] = _normalize_stock_code_series(normalized["code"])
+    return normalized
+
+
+def _normalize_industry_strength_keys(df: pd.DataFrame) -> pd.DataFrame:
+    normalized = df.copy()
+    if "trade_date" in normalized.columns:
+        normalized["trade_date"] = _normalize_trade_date_series(normalized["trade_date"])
+    if "industry_code" in normalized.columns:
+        normalized["industry_code"] = normalized["industry_code"].fillna("").astype(str).str.strip()
+    return normalized
+
+
+def _normalize_stock_industry_map_keys(df: pd.DataFrame) -> pd.DataFrame:
+    normalized = df.copy()
+    if "code" in normalized.columns:
+        normalized["code"] = _normalize_stock_code_series(normalized["code"])
+    if "industry_code" in normalized.columns:
+        normalized["industry_code"] = normalized["industry_code"].fillna("").astype(str).str.strip()
+    return normalized
+
+
+def _normalize_trade_date_series(series: pd.Series) -> pd.Series:
+    values = series.fillna("").astype(str).str.strip()
+    digits = values.str.replace(r"\D", "", regex=True)
+    normalized = digits.where(digits.str.len() == 8, "")
+    needs_parse = normalized.eq("") & values.ne("")
+    if needs_parse.any():
+        parsed = pd.to_datetime(values[needs_parse], errors="coerce")
+        normalized.loc[needs_parse] = parsed.dt.strftime("%Y%m%d").fillna("")
+    return normalized
+
+
+def _normalize_trade_date_value(value: object) -> str:
+    return _normalize_trade_date_series(pd.Series([value])).iloc[0]
+
+
+def _normalize_stock_code_series(series: pd.Series) -> pd.Series:
+    values = series.fillna("").astype(str).str.strip()
+    return values.map(_normalize_stock_code)
+
+
+def _normalize_stock_code(value: str) -> str:
+    match = re.search(r"\d{6}", value)
+    if match:
+        return match.group(0)
+    digits = re.sub(r"\D", "", value)
+    if digits:
+        return digits.zfill(6)[-6:]
+    return ""
+
+
+def _extension_key_join_condition(table_name: str, incoming_name: str, column: str) -> str:
+    if column == "trade_date":
+        return f"replace({table_name}.{column}, '-', '') = replace({incoming_name}.{column}, '-', '')"
+    return f"{table_name}.{column} = {incoming_name}.{column}"
+
+
 class StockAgentStore:
     def __init__(self, db_path: str):
         self.db_path = db_path
@@ -274,7 +338,7 @@ class StockAgentStore:
         self._ensure_parent_dir()
         normalized = self._normalize_dataframe(
             df,
-            ["code", "name", "market", "board", "list_status"],
+            ["code", "name", "market", "board", "industry", "list_status"],
         ).drop_duplicates(subset=["code"], keep="last")
 
         with self._connect() as con:
@@ -291,8 +355,8 @@ class StockAgentStore:
                 )
                 con.execute(
                     """
-                    INSERT INTO stock_basic (code, name, market, board, list_status)
-                    SELECT code, name, market, board, list_status
+                    INSERT INTO stock_basic (code, name, market, board, industry, list_status)
+                    SELECT code, name, market, board, industry, list_status
                     FROM incoming_stock_basic
                     """
                 )
@@ -309,7 +373,7 @@ class StockAgentStore:
             self._create_tables(con)
             return con.execute(
                 """
-                SELECT code, name, market, board, list_status
+                SELECT code, name, market, board, industry, list_status
                 FROM stock_basic
                 ORDER BY code
                 """
@@ -548,12 +612,14 @@ class StockAgentStore:
         return self._load_extension_table("sw_daily", SW_DAILY_COLUMNS, conditions, params)
 
     def save_stock_industry_map(self, df: pd.DataFrame) -> None:
+        df = _normalize_stock_industry_map_keys(df)
         self._save_extension_table(df, "stock_industry_map", STOCK_INDUSTRY_MAP_COLUMNS, ["code"])
 
     def load_stock_industry_map(self) -> pd.DataFrame:
         return self._load_extension_table("stock_industry_map", STOCK_INDUSTRY_MAP_COLUMNS)
 
     def save_industry_strength(self, df: pd.DataFrame) -> None:
+        df = _normalize_industry_strength_keys(df)
         self._save_extension_table(df, "industry_strength", INDUSTRY_STRENGTH_COLUMNS, ["trade_date", "industry_code"])
 
     def load_industry_strength(self, trade_date: str | None = None) -> pd.DataFrame:
@@ -561,7 +627,7 @@ class StockAgentStore:
         params = []
         if trade_date is not None:
             conditions.append("trade_date = ?")
-            params.append(trade_date)
+            params.append(_normalize_trade_date_value(trade_date))
         return self._load_extension_table("industry_strength", INDUSTRY_STRENGTH_COLUMNS, conditions, params)
 
     def save_data_quality_report(self, df: pd.DataFrame) -> None:
@@ -697,7 +763,7 @@ class StockAgentStore:
 
     def save_daily_factors(self, df: pd.DataFrame) -> None:
         self._ensure_parent_dir()
-        normalized = self._normalize_dataframe(df, DAILY_FACTOR_COLUMNS).drop_duplicates(
+        normalized = self._normalize_dataframe(_normalize_daily_factor_keys(df), DAILY_FACTOR_COLUMNS).drop_duplicates(
             subset=["trade_date", "code"],
             keep="last",
         )
@@ -711,7 +777,7 @@ class StockAgentStore:
                     """
                     DELETE FROM daily_factors
                     USING incoming_daily_factors
-                    WHERE daily_factors.trade_date = incoming_daily_factors.trade_date
+                    WHERE replace(daily_factors.trade_date, '-', '') = incoming_daily_factors.trade_date
                       AND daily_factors.code = incoming_daily_factors.code
                     """
                 )
@@ -740,13 +806,13 @@ class StockAgentStore:
         params = []
         if trade_date is not None:
             conditions.append("trade_date = ?")
-            params.append(trade_date)
+            params.append(_normalize_trade_date_value(trade_date))
         if start_date is not None:
             conditions.append("trade_date >= ?")
-            params.append(start_date)
+            params.append(_normalize_trade_date_value(start_date))
         if end_date is not None:
             conditions.append("trade_date <= ?")
-            params.append(end_date)
+            params.append(_normalize_trade_date_value(end_date))
         where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
 
         query = f"""
@@ -943,8 +1009,8 @@ class StockAgentStore:
         params = []
         where_clause = ""
         if trade_date is not None:
-            where_clause = "WHERE trade_date = ?"
-            params.append(trade_date)
+            where_clause = "WHERE replace(trade_date, '-', '') = ?"
+            params.append(_normalize_trade_date_value(trade_date))
 
         query = f"""
             SELECT
@@ -991,6 +1057,7 @@ class StockAgentStore:
                 "risk_flags",
             ],
         )
+        normalized = _normalize_daily_factor_keys(normalized)
         normalized["strategy_version"] = normalized["strategy_version"].fillna("v1")
         normalized = normalized.drop_duplicates(
             subset=["trade_date", "code", "strategy_name", "strategy_version"],
@@ -1041,14 +1108,14 @@ class StockAgentStore:
         conditions = []
         params = []
         if trade_date is not None:
-            conditions.append("trade_date = ?")
-            params.append(trade_date)
+            conditions.append("replace(trade_date, '-', '') = ?")
+            params.append(_normalize_trade_date_value(trade_date))
         if start_date is not None:
-            conditions.append("trade_date >= ?")
-            params.append(start_date)
+            conditions.append("replace(trade_date, '-', '') >= ?")
+            params.append(_normalize_trade_date_value(start_date))
         if end_date is not None:
-            conditions.append("trade_date <= ?")
-            params.append(end_date)
+            conditions.append("replace(trade_date, '-', '') <= ?")
+            params.append(_normalize_trade_date_value(end_date))
         where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
 
         query = f"""
@@ -2390,9 +2457,15 @@ class StockAgentStore:
                 name VARCHAR,
                 market VARCHAR,
                 board VARCHAR,
+                industry VARCHAR,
                 list_status VARCHAR
             )
             """
+        )
+        StockAgentStore._ensure_columns(
+            con,
+            "stock_basic",
+            {"industry": "VARCHAR"},
         )
         con.execute(
             """
@@ -3554,7 +3627,7 @@ class StockAgentStore:
             con.execute("BEGIN TRANSACTION")
             try:
                 join_conditions = " AND ".join(
-                    f"{table_name}.{column} = {incoming_name}.{column}" for column in key_columns
+                    _extension_key_join_condition(table_name, incoming_name, column) for column in key_columns
                 )
                 con.execute(
                     f"""

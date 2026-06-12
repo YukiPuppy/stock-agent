@@ -284,7 +284,7 @@ def test_run_system_health_check_reports_industry_state(tmp_path):
     )
 
     state = summary["industry_state"].iloc[0]
-    assert summary["latest_industry_strength_date"] == "2025-01-02"
+    assert summary["latest_industry_strength_date"] == "20250102"
     assert summary["strong_industry_count"] == 1
     assert summary["weak_industry_count"] == 1
     assert bool(state["merged_to_daily_factors"]) is True

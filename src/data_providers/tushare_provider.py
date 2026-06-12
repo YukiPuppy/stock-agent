@@ -12,7 +12,7 @@ from src.data_providers.akshare_provider import DAILY_BAR_COLUMNS
 from src.utils.proxy import no_proxy_context
 
 
-STOCK_BASIC_COLUMNS = ["code", "name", "market", "board", "list_date", "status", "list_status"]
+STOCK_BASIC_COLUMNS = ["code", "name", "market", "board", "industry", "list_date", "status", "list_status"]
 TUSHARE_DAILY_FIELDS = "ts_code,trade_date,open,high,low,close,vol,amount"
 TUSHARE_DAILY_BASIC_FIELDS = (
     "ts_code,trade_date,close,turnover_rate,turnover_rate_f,volume_ratio,"
@@ -236,6 +236,7 @@ def normalize_tushare_stock_basic(df: pd.DataFrame) -> pd.DataFrame:
     else:
         result["market"] = df["market"] if "market" in df.columns else ""
     result["board"] = df["board"] if "board" in df.columns else (df["market"] if "market" in df.columns else "")
+    result["industry"] = df["industry"] if "industry" in df.columns else ""
     result["list_date"] = df["list_date"] if "list_date" in df.columns else ""
 
     status_column = _first_existing_column(df, ("status", "list_status"))

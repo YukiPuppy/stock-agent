@@ -68,6 +68,7 @@ def test_normalize_tushare_stock_basic_outputs_standard_fields():
         {
             "ts_code": ["000001.SZ"],
             "name": ["平安银行"],
+            "industry": ["银行"],
             "market": ["主板"],
             "list_date": ["19910403"],
             "list_status": ["L"],
@@ -82,6 +83,7 @@ def test_normalize_tushare_stock_basic_outputs_standard_fields():
             "name": "平安银行",
             "market": "SZ",
             "board": "主板",
+            "industry": "银行",
             "list_date": "19910403",
             "status": "L",
             "list_status": "L",

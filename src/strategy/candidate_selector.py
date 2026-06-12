@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 import pandas as pd
 
 
@@ -84,14 +86,16 @@ def select_candidates(
         return _empty_candidates()
 
     factors = daily_factors.copy()
-    selected_trade_date = trade_date
+    selected_trade_date = _normalize_trade_date(trade_date) if trade_date is not None else None
+    factors["_trade_date_key"] = factors["trade_date"].map(_normalize_trade_date)
     if selected_trade_date is None:
-        trade_dates = factors["trade_date"].dropna()
+        trade_dates = factors["_trade_date_key"].dropna()
         if trade_dates.empty:
             return _empty_candidates()
         selected_trade_date = str(trade_dates.max())
 
-    candidates = factors[factors["trade_date"] == selected_trade_date].copy()
+    candidates = factors[factors["_trade_date_key"] == selected_trade_date].copy()
+    candidates = candidates.drop(columns=["_trade_date_key"], errors="ignore")
     if candidates.empty:
         return _empty_candidates()
 
@@ -227,14 +231,16 @@ def select_candidates_from_signals(
         return _empty_candidates()
 
     signals = strategy_signals.copy()
-    selected_trade_date = trade_date
+    selected_trade_date = _normalize_trade_date(trade_date) if trade_date is not None else None
+    signals["_trade_date_key"] = signals["trade_date"].map(_normalize_trade_date)
     if selected_trade_date is None:
-        trade_dates = signals["trade_date"].dropna()
+        trade_dates = signals["_trade_date_key"].dropna()
         if trade_dates.empty:
             return _empty_candidates()
         selected_trade_date = str(trade_dates.max())
 
-    signals = signals[signals["trade_date"] == selected_trade_date].copy()
+    signals = signals[signals["_trade_date_key"] == selected_trade_date].copy()
+    signals = signals.drop(columns=["_trade_date_key"], errors="ignore")
     if signals.empty:
         return _empty_candidates()
 
@@ -434,7 +440,9 @@ def _factors_for_trade_date(daily_factors: pd.DataFrame, trade_date: str) -> pd.
         "industry_amount_ratio_5",
         "industry_risk_flags",
     ]
-    factors = daily_factors[daily_factors["trade_date"] == trade_date].copy()
+    selected_trade_date = _normalize_trade_date(trade_date)
+    factor_dates = daily_factors["trade_date"].map(_normalize_trade_date)
+    factors = daily_factors[factor_dates == selected_trade_date].copy()
     for column in base_factor_columns:
         if column not in factors.columns:
             factors[column] = None
@@ -442,6 +450,19 @@ def _factors_for_trade_date(daily_factors: pd.DataFrame, trade_date: str) -> pd.
         column for column in extension_factor_columns if column in factors.columns
     ]
     return factors.loc[:, factor_columns].drop_duplicates(subset=["trade_date", "code"], keep="last")
+
+
+def _normalize_trade_date(value: object) -> str:
+    if value is None or pd.isna(value):
+        return ""
+    text = str(value).strip()
+    digits = re.sub(r"\D", "", text)
+    if len(digits) == 8:
+        return digits
+    parsed = pd.to_datetime(text, errors="coerce")
+    if pd.isna(parsed):
+        return ""
+    return parsed.strftime("%Y%m%d")
 
 
 def _join_unique_values(values: pd.Series) -> str:

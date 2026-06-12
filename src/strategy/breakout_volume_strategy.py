@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 import pandas as pd
 
 from src.strategy.base_strategy import BaseStrategy, SIGNAL_COLUMNS, empty_signals
@@ -53,14 +55,16 @@ class BreakoutVolumeStrategy(BaseStrategy):
 
 def _prepare_factors(daily_factors: pd.DataFrame, trade_date: str | None) -> pd.DataFrame:
     factors = daily_factors.copy()
-    selected_trade_date = trade_date
+    selected_trade_date = _normalize_trade_date(trade_date) if trade_date is not None else None
+    factors["_trade_date_key"] = factors["trade_date"].map(_normalize_trade_date)
     if selected_trade_date is None:
-        trade_dates = factors["trade_date"].dropna()
+        trade_dates = factors["_trade_date_key"].dropna()
         if trade_dates.empty:
             return pd.DataFrame()
         selected_trade_date = str(trade_dates.max())
 
-    factors = factors[factors["trade_date"] == selected_trade_date].copy()
+    factors = factors[factors["_trade_date_key"] == selected_trade_date].copy()
+    factors = factors.drop(columns=["_trade_date_key"], errors="ignore")
     for column in ["pct_chg_5d", "pct_chg_1d", "close_position_20", "volume_ratio_5"]:
         if column not in factors.columns:
             factors[column] = pd.NA
@@ -82,3 +86,16 @@ def _risk_flags(row: pd.Series) -> str:
 
 def _required_bool(values: pd.Series, required: bool) -> pd.Series:
     return values if required else pd.Series(True, index=values.index)
+
+
+def _normalize_trade_date(value: object) -> str:
+    if value is None or pd.isna(value):
+        return ""
+    text = str(value).strip()
+    digits = re.sub(r"\D", "", text)
+    if len(digits) == 8:
+        return digits
+    parsed = pd.to_datetime(text, errors="coerce")
+    if pd.isna(parsed):
+        return ""
+    return parsed.strftime("%Y%m%d")

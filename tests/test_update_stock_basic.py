@@ -10,6 +10,7 @@ def test_update_stock_basic_filters_and_writes_to_duckdb(tmp_path, monkeypatch):
             "name": ["浦发银行", "平安银行", "宁德时代", "中芯国际", "北交样本", "ST样本"],
             "market": ["SH", "SZ", "SZ", "SH", "BJ", "SH"],
             "board": ["主板", "主板", "创业板", "科创板", "北交所", "主板"],
+            "industry": ["银行", "银行", "电力设备", "电子", "机械设备", "综合"],
             "list_status": ["L", "L", "L", "L", "L", "L"],
         }
     )
@@ -41,6 +42,7 @@ def test_update_stock_basic_filters_and_writes_to_duckdb(tmp_path, monkeypatch):
             "name": "平安银行",
             "market": "SZ",
             "board": "主板",
+            "industry": "银行",
             "list_status": "L",
         },
         {
@@ -48,6 +50,7 @@ def test_update_stock_basic_filters_and_writes_to_duckdb(tmp_path, monkeypatch):
             "name": "浦发银行",
             "market": "SH",
             "board": "主板",
+            "industry": "银行",
             "list_status": "L",
         },
     ]

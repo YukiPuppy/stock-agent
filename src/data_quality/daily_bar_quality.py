@@ -11,7 +11,7 @@ KEY_COLUMNS = REQUIRED_COLUMNS
 PRICE_COLUMNS = ["open", "high", "low", "close"]
 ENRICHED_DAILY_FACTOR_COLUMNS = ["volume_ratio_daily_basic", "total_mv", "circ_mv"]
 MONEYFLOW_FACTOR_COLUMNS = ["moneyflow_score", "main_net_amount", "main_net_amount_ratio"]
-INDUSTRY_STRENGTH_COLUMNS = ["industry_strength_score", "industry_strength_level", "industry_return_5d"]
+INDUSTRY_STRENGTH_COLUMNS = ["industry_strength_score", "industry_strength_level"]
 
 
 def check_daily_bars_quality(df: pd.DataFrame) -> pd.DataFrame:

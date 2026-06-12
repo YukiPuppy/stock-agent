@@ -109,3 +109,19 @@ def test_check_industry_strength_quality_warns_on_empty_map_and_high_missing_rat
     assert result.loc["stock_industry_map_status", "status"] == "warning"
     assert result.loc["industry_strength_missing_rate", "status"] == "warning"
     assert "66.7%" in result.loc["industry_strength_missing_rate", "message"]
+
+
+def test_check_industry_strength_quality_ignores_return_window_warmup_missing_values():
+    stock_map = pd.DataFrame({"code": ["000001"], "industry_code": ["801780.SI"]})
+    factors = pd.DataFrame(
+        {
+            "industry_strength_score": [50, 65],
+            "industry_strength_level": ["neutral", "strong"],
+            "industry_return_5d": [pd.NA, pd.NA],
+        }
+    )
+
+    result = check_industry_strength_quality(stock_map, factors).set_index("check_name")
+
+    assert result.loc["industry_strength_missing_rate", "status"] == "ok"
+    assert "0.0%" in result.loc["industry_strength_missing_rate", "message"]

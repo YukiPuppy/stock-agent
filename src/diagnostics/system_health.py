@@ -915,7 +915,7 @@ def _check_moneyflow_state(store: StockAgentStore) -> pd.DataFrame:
 
 
 def _check_industry_state(store: StockAgentStore) -> pd.DataFrame:
-    required_columns = ["industry_strength_score", "industry_strength_level", "industry_return_5d"]
+    required_columns = ["industry_strength_score", "industry_strength_level"]
     try:
         classification = store.load_sw_industry_classification()
         sw_daily = store.load_sw_daily()
