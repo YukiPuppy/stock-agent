@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-import re
-
+import numpy as np
 import pandas as pd
 
 from src.strategy.base_strategy import BaseStrategy, SIGNAL_COLUMNS, empty_signals
+from src.strategy.date_utils import TRADE_DATE_KEY_COLUMN, normalize_trade_date_series, normalize_trade_date_value
 from src.strategy.strategy_config import get_strategy_config
 
 
@@ -49,22 +49,25 @@ class BreakoutVolumeStrategy(BaseStrategy):
             + signals["close_position_20"] * 20
         )
         signals["entry_reason"] = "短期强度较高且量能放大，适合作为突破观察标的。"
-        signals["risk_flags"] = signals.apply(_risk_flags, axis=1)
+        signals["risk_flags"] = _risk_flags(signals)
         return signals.loc[:, SIGNAL_COLUMNS].reset_index(drop=True)
 
 
 def _prepare_factors(daily_factors: pd.DataFrame, trade_date: str | None) -> pd.DataFrame:
-    factors = daily_factors.copy()
-    selected_trade_date = _normalize_trade_date(trade_date) if trade_date is not None else None
-    factors["_trade_date_key"] = factors["trade_date"].map(_normalize_trade_date)
+    selected_trade_date = normalize_trade_date_value(trade_date) if trade_date is not None else None
+    trade_date_keys = (
+        daily_factors[TRADE_DATE_KEY_COLUMN]
+        if TRADE_DATE_KEY_COLUMN in daily_factors.columns
+        else normalize_trade_date_series(daily_factors["trade_date"])
+    )
     if selected_trade_date is None:
-        trade_dates = factors["_trade_date_key"].dropna()
+        trade_dates = trade_date_keys[trade_date_keys.ne("")]
         if trade_dates.empty:
             return pd.DataFrame()
         selected_trade_date = str(trade_dates.max())
 
-    factors = factors[factors["_trade_date_key"] == selected_trade_date].copy()
-    factors = factors.drop(columns=["_trade_date_key"], errors="ignore")
+    factors = daily_factors.loc[trade_date_keys == selected_trade_date].copy()
+    factors = factors.drop(columns=[TRADE_DATE_KEY_COLUMN], errors="ignore")
     for column in ["pct_chg_5d", "pct_chg_1d", "close_position_20", "volume_ratio_5"]:
         if column not in factors.columns:
             factors[column] = pd.NA
@@ -75,13 +78,17 @@ def _prepare_factors(daily_factors: pd.DataFrame, trade_date: str | None) -> pd.
     return factors
 
 
-def _risk_flags(row: pd.Series) -> str:
-    flags = []
-    if row["pct_chg_1d"] > 0.07:
-        flags.append("near_limit_chase_risk")
-    if row["close_position_20"] > 0.95:
-        flags.append("extended_position")
-    return ",".join(flags)
+def _risk_flags(signals: pd.DataFrame) -> pd.Series:
+    chase_risk = signals["pct_chg_1d"] > 0.07
+    extended = signals["close_position_20"] > 0.95
+    return pd.Series(
+        np.select(
+            [chase_risk & extended, chase_risk, extended],
+            ["near_limit_chase_risk,extended_position", "near_limit_chase_risk", "extended_position"],
+            default="",
+        ),
+        index=signals.index,
+    )
 
 
 def _required_bool(values: pd.Series, required: bool) -> pd.Series:
@@ -89,13 +96,4 @@ def _required_bool(values: pd.Series, required: bool) -> pd.Series:
 
 
 def _normalize_trade_date(value: object) -> str:
-    if value is None or pd.isna(value):
-        return ""
-    text = str(value).strip()
-    digits = re.sub(r"\D", "", text)
-    if len(digits) == 8:
-        return digits
-    parsed = pd.to_datetime(text, errors="coerce")
-    if pd.isna(parsed):
-        return ""
-    return parsed.strftime("%Y%m%d")
+    return normalize_trade_date_value(value)

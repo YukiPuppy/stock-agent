@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 
 
@@ -217,7 +218,7 @@ def _merge_trade_plan_performance(base: pd.DataFrame, performance: pd.DataFrame 
     trade["strategy_version"] = trade["strategy_version"].replace("", pd.NA).fillna("v1")
     for column in ["plan_count", "triggered_count", "valid_count", "trigger_rate", "win_rate", "avg_return", "avg_max_drawdown"]:
         trade[column] = pd.to_numeric(trade[column], errors="coerce")
-    trade = trade.groupby(["strategy_name", "strategy_version"], dropna=False).apply(_aggregate_trade_plan).reset_index()
+    trade = _aggregate_trade_plan_performance(trade)
     trade = trade.rename(
         columns={
             "valid_count": "trade_plan_valid_count",
@@ -243,6 +244,48 @@ def _merge_trade_plan_performance(base: pd.DataFrame, performance: pd.DataFrame 
         how="left",
     )
     return _ensure_trade_plan_columns(result)
+
+
+def _aggregate_trade_plan_performance(trade: pd.DataFrame) -> pd.DataFrame:
+    group_columns = ["strategy_name", "strategy_version"]
+    grouped = trade.groupby(group_columns, dropna=False)
+    plan_count = grouped["plan_count"].sum(min_count=1)
+    triggered_count = grouped["triggered_count"].sum(min_count=1)
+    valid_count = grouped["valid_count"].sum(min_count=1)
+
+    trigger_rate_fallback = _weighted_mean_by_group(trade, "trigger_rate", "plan_count", group_columns)
+    trigger_rate = triggered_count / plan_count
+    trigger_rate = trigger_rate.where(plan_count.notna() & plan_count.ne(0), trigger_rate_fallback)
+
+    result = pd.DataFrame(
+        {
+            "valid_count": valid_count,
+            "trigger_rate": trigger_rate,
+            "win_rate": _weighted_mean_by_group(trade, "win_rate", "valid_count", group_columns),
+            "avg_return": _weighted_mean_by_group(trade, "avg_return", "valid_count", group_columns),
+            "avg_max_drawdown": _weighted_mean_by_group(trade, "avg_max_drawdown", "valid_count", group_columns),
+        }
+    )
+    return result.reset_index()
+
+
+def _weighted_mean_by_group(
+    df: pd.DataFrame,
+    value_column: str,
+    weight_column: str,
+    group_columns: list[str],
+) -> pd.Series:
+    values = pd.to_numeric(df[value_column], errors="coerce")
+    weights = pd.to_numeric(df[weight_column], errors="coerce").fillna(0)
+    valid = values.notna()
+    weighted_values = (values * weights).where(valid)
+    grouped_weighted_sum = weighted_values.groupby([df[column] for column in group_columns], dropna=False).sum(min_count=1)
+    grouped_weight_sum = weights.where(valid, 0).groupby([df[column] for column in group_columns], dropna=False).sum()
+    grouped_mean = values.groupby([df[column] for column in group_columns], dropna=False).mean()
+    return pd.Series(
+        np.where(grouped_weight_sum > 0, grouped_weighted_sum / grouped_weight_sum, grouped_mean),
+        index=grouped_mean.index,
+    )
 
 
 def _aggregate_trade_plan(group: pd.DataFrame) -> pd.Series:

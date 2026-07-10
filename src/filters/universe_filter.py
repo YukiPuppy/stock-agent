@@ -25,12 +25,18 @@ def _normalize_code(value: object) -> str:
     return match.group(0).zfill(6)
 
 
+def _normalize_code_series(values: pd.Series) -> pd.Series:
+    text = values.fillna("").astype(str).str.strip().str.upper()
+    digits = text.str.extract(r"(\d{1,6})", expand=False).fillna("")
+    return digits.str.zfill(6).where(digits.ne(""), "")
+
+
 def filter_tradable_main_board(df: pd.DataFrame) -> pd.DataFrame:
     """Filter an input stock table down to tradable Shanghai/Shenzhen main-board names."""
     if "code" not in df.columns:
         raise ValueError("df must contain a 'code' column")
 
-    codes = df["code"].map(_normalize_code)
+    codes = _normalize_code_series(df["code"])
 
     is_main_board = codes.str.startswith(MAIN_BOARD_PREFIXES, na=False)
     is_chinext = codes.str.startswith(CHINEXT_PREFIXES, na=False)

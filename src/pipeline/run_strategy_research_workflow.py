@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import argparse
+import time
 from collections.abc import Sequence
+from typing import Any
 
 import pandas as pd
 
@@ -66,6 +68,7 @@ def run_strategy_research_workflow(
 ) -> dict:
     """Run local research steps and return row counts plus exported artifact paths."""
     resolved_db_path = _resolve_db_path(db_path)
+    profile_steps: list[dict[str, Any]] = []
     skipped_oos = not _has_oos_dates(
         train_start_date=train_start_date,
         train_end_date=train_end_date,
@@ -73,47 +76,71 @@ def run_strategy_research_workflow(
         validation_end_date=validation_end_date,
     )
 
-    version_backtest_results, version_performance = run_strategy_version_backtest(
-        start_date=train_start_date,
-        end_date=train_end_date,
-        config_path=strategy_versions_config_path,
-        db_path=resolved_db_path,
-        limit_strategies=limit_strategies,
+    version_backtest_results, version_performance = _profiled(
+        profile_steps,
+        "run_strategy_version_backtest",
+        lambda: run_strategy_version_backtest(
+            start_date=train_start_date,
+            end_date=train_end_date,
+            config_path=strategy_versions_config_path,
+            db_path=resolved_db_path,
+            limit_strategies=limit_strategies,
+        ),
     )
-    version_evaluation = run_strategy_version_evaluation(db_path=resolved_db_path)
-
-    parameter_backtest_results, parameter_performance, parameter_results = run_parameter_search(
-        start_date=parameter_search_start_date,
-        end_date=parameter_search_end_date,
-        config_path=parameter_search_config_path,
-        db_path=resolved_db_path,
-        limit_strategies=limit_strategies,
-        limit_param_combinations=limit_param_combinations,
+    version_evaluation = _profiled(
+        profile_steps,
+        "run_strategy_version_evaluation",
+        lambda: run_strategy_version_evaluation(db_path=resolved_db_path),
     )
 
-    walk_forward_validation = pd.DataFrame()
-    if not skipped_oos:
-        walk_forward_validation = run_oos_validation(
-            train_start_date=str(train_start_date),
-            train_end_date=str(train_end_date),
-            validation_start_date=str(validation_start_date),
-            validation_end_date=str(validation_end_date),
+    parameter_backtest_results, parameter_performance, parameter_results = _profiled(
+        profile_steps,
+        "run_parameter_search",
+        lambda: run_parameter_search(
+            start_date=parameter_search_start_date,
+            end_date=parameter_search_end_date,
             config_path=parameter_search_config_path,
             db_path=resolved_db_path,
             limit_strategies=limit_strategies,
             limit_param_combinations=limit_param_combinations,
-        )
-
-    _, trade_plan_backtest_results, trade_plan_performance = run_trade_plan_backtest(
-        db_path=resolved_db_path,
-        start_date=train_start_date,
-        end_date=train_end_date,
+        ),
     )
 
-    admission = run_strategy_admission(
-        db_path=resolved_db_path,
-        export_candidate_config=export_candidate_config,
-        candidate_config_path=candidate_config_path,
+    walk_forward_validation = pd.DataFrame()
+    if not skipped_oos:
+        walk_forward_validation = _profiled(
+            profile_steps,
+            "run_oos_validation",
+            lambda: run_oos_validation(
+                train_start_date=str(train_start_date),
+                train_end_date=str(train_end_date),
+                validation_start_date=str(validation_start_date),
+                validation_end_date=str(validation_end_date),
+                config_path=parameter_search_config_path,
+                db_path=resolved_db_path,
+                limit_strategies=limit_strategies,
+                limit_param_combinations=limit_param_combinations,
+            ),
+        )
+
+    _, trade_plan_backtest_results, trade_plan_performance = _profiled(
+        profile_steps,
+        "run_trade_plan_backtest",
+        lambda: run_trade_plan_backtest(
+            db_path=resolved_db_path,
+            start_date=train_start_date,
+            end_date=train_end_date,
+        ),
+    )
+
+    admission = _profiled(
+        profile_steps,
+        "run_strategy_admission",
+        lambda: run_strategy_admission(
+            db_path=resolved_db_path,
+            export_candidate_config=export_candidate_config,
+            candidate_config_path=candidate_config_path,
+        ),
     )
 
     strategy_evaluation_report_path = None
@@ -123,30 +150,50 @@ def run_strategy_research_workflow(
     strategy_admission_report_path = None
 
     if export_reports:
-        strategy_evaluation_report_path = export_strategy_evaluation_report(
-            db_path=resolved_db_path,
-            output_dir=output_dir,
-        )
-        parameter_search_report_path = export_parameter_search_report(
-            db_path=resolved_db_path,
-            output_dir=output_dir,
-        )
-        if not skipped_oos:
-            walk_forward_validation_report_path = export_walk_forward_validation_report(
+        strategy_evaluation_report_path = _profiled(
+            profile_steps,
+            "export_strategy_evaluation_report",
+            lambda: export_strategy_evaluation_report(
                 db_path=resolved_db_path,
                 output_dir=output_dir,
-                train_start_date=train_start_date,
-                train_end_date=train_end_date,
-                validation_start_date=validation_start_date,
-                validation_end_date=validation_end_date,
-            )
-        trade_plan_backtest_report_path = export_trade_plan_backtest_report(
-            db_path=resolved_db_path,
-            output_dir=output_dir,
+            ),
         )
-        strategy_admission_report_path = export_strategy_admission_report(
-            db_path=resolved_db_path,
-            output_dir=output_dir,
+        parameter_search_report_path = _profiled(
+            profile_steps,
+            "export_parameter_search_report",
+            lambda: export_parameter_search_report(
+                db_path=resolved_db_path,
+                output_dir=output_dir,
+            ),
+        )
+        if not skipped_oos:
+            walk_forward_validation_report_path = _profiled(
+                profile_steps,
+                "export_walk_forward_validation_report",
+                lambda: export_walk_forward_validation_report(
+                    db_path=resolved_db_path,
+                    output_dir=output_dir,
+                    train_start_date=train_start_date,
+                    train_end_date=train_end_date,
+                    validation_start_date=validation_start_date,
+                    validation_end_date=validation_end_date,
+                ),
+            )
+        trade_plan_backtest_report_path = _profiled(
+            profile_steps,
+            "export_trade_plan_backtest_report",
+            lambda: export_trade_plan_backtest_report(
+                db_path=resolved_db_path,
+                output_dir=output_dir,
+            ),
+        )
+        strategy_admission_report_path = _profiled(
+            profile_steps,
+            "export_strategy_admission_report",
+            lambda: export_strategy_admission_report(
+                db_path=resolved_db_path,
+                output_dir=output_dir,
+            ),
         )
 
     return {
@@ -171,7 +218,49 @@ def run_strategy_research_workflow(
         "active_candidate_config_path": candidate_config_path if export_candidate_config else None,
         "limit_strategies": limit_strategies,
         "limit_param_combinations": limit_param_combinations,
+        "profile_steps": profile_steps,
     }
+
+
+def _profiled(profile_steps: list[dict[str, Any]], function_name: str, runner):
+    started_at = time.perf_counter()
+    try:
+        result = runner()
+    except Exception:
+        elapsed = time.perf_counter() - started_at
+        profile_steps.append(
+            {
+                "function_name": function_name,
+                "status": "failed",
+                "elapsed_seconds": elapsed,
+                "rows": 0,
+            }
+        )
+        print(f"[profile] {function_name} failed elapsed={elapsed:.2f}s", flush=True)
+        raise
+
+    elapsed = time.perf_counter() - started_at
+    rows = _profile_rows(result)
+    profile_steps.append(
+        {
+            "function_name": function_name,
+            "status": "success",
+            "elapsed_seconds": elapsed,
+            "rows": rows,
+        }
+    )
+    print(f"[profile] {function_name} rows={rows} elapsed={elapsed:.2f}s", flush=True)
+    return result
+
+
+def _profile_rows(result: Any) -> int:
+    if isinstance(result, pd.DataFrame):
+        return len(result)
+    if isinstance(result, tuple):
+        return int(sum(len(item) for item in result if isinstance(item, pd.DataFrame)))
+    if isinstance(result, dict):
+        return int(sum(value for key, value in result.items() if key.endswith("_rows") and isinstance(value, int)))
+    return 0
 
 
 def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:

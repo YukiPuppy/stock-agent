@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 
 
@@ -104,11 +105,22 @@ def build_moneyflow_factors(moneyflow: pd.DataFrame) -> pd.DataFrame:
     result["moneyflow_score"] = score
 
     missing_moneyflow = data[MONEYFLOW_REQUIRED_COLUMNS].isna().any(axis=1) | bool(missing_input_columns)
-    result["moneyflow_risk_flags"] = [
-        _risk_flags(row, missing)
-        for (_, row), missing in zip(result.iterrows(), missing_moneyflow)
-    ]
+    result["moneyflow_risk_flags"] = ""
+    result = _append_flag_where(result, result["main_net_amount"] < 0, "main_outflow")
+    result = _append_flag_where(result, result["main_net_amount_ratio"] < -0.10, "strong_main_outflow")
+    result = _append_flag_where(result, result["moneyflow_score"] < 0, "weak_moneyflow")
+    result = _append_flag_where(result, result["main_net_amount_ratio"] > 0.10, "strong_main_inflow")
+    result = _append_flag_where(result, missing_moneyflow, "missing_moneyflow")
     return result.loc[:, MONEYFLOW_FACTOR_COLUMNS].sort_values(["trade_date", "code"]).reset_index(drop=True)
+
+
+def _append_flag_where(df: pd.DataFrame, mask: pd.Series, flag: str) -> pd.DataFrame:
+    aligned_mask = mask.reindex(df.index, fill_value=False).fillna(False).astype(bool)
+    if not aligned_mask.any():
+        return df
+    existing = df.loc[aligned_mask, "moneyflow_risk_flags"].fillna("").astype(str).str.strip()
+    df.loc[aligned_mask, "moneyflow_risk_flags"] = np.where(existing.eq(""), flag, existing + "," + flag)
+    return df
 
 
 def _risk_flags(row: pd.Series, missing_moneyflow: bool) -> str:

@@ -22,7 +22,7 @@ def build_market_regime(index_daily: pd.DataFrame, limit_list_daily: pd.DataFram
     if sh.empty or "close" not in sh.columns:
         return pd.DataFrame(columns=MARKET_REGIME_COLUMNS)
 
-    sh["trade_date"] = sh["trade_date"].map(_format_date)
+    sh["trade_date"] = _format_date_series(sh["trade_date"])
     sh["close"] = pd.to_numeric(sh["close"], errors="coerce")
     sh["pct_chg"] = pd.to_numeric(sh.get("pct_chg", pd.NA), errors="coerce")
     sh = sh.dropna(subset=["trade_date", "close"]).sort_values("trade_date").drop_duplicates("trade_date", keep="last")
@@ -35,7 +35,7 @@ def build_market_regime(index_daily: pd.DataFrame, limit_list_daily: pd.DataFram
     sh["sh_above_ma5"] = sh["close"] > sh["ma5"]
     sh["sh_above_ma10"] = sh["close"] > sh["ma10"]
     sh["sh_above_ma20"] = sh["close"] > sh["ma20"]
-    sh["index_trend_score"] = sh.apply(_index_trend_score, axis=1)
+    sh["index_trend_score"] = _index_trend_scores(sh)
 
     sentiment = _sentiment_by_date(limit_list_daily)
     rows = []
@@ -85,11 +85,22 @@ def _index_trend_score(row: pd.Series) -> float:
     return float(score)
 
 
+def _index_trend_scores(frame: pd.DataFrame) -> pd.Series:
+    score = pd.Series(0.0, index=frame.index)
+    score += frame["sh_above_ma5"].astype(bool).astype(int) * 10
+    score += frame["sh_above_ma10"].astype(bool).astype(int) * 10
+    score += frame["sh_above_ma20"].astype(bool).astype(int) * 20
+    pct_chg = pd.to_numeric(frame["pct_chg"], errors="coerce")
+    score += (pct_chg > 0).astype(int) * 10
+    score -= (pct_chg < -1.5).astype(int) * 20
+    return score
+
+
 def _sentiment_by_date(limit_list_daily: pd.DataFrame) -> dict[str, dict[str, object]]:
     if limit_list_daily.empty or "trade_date" not in limit_list_daily.columns:
         return {}
     df = limit_list_daily.copy()
-    df["trade_date"] = df["trade_date"].map(_format_date)
+    df["trade_date"] = _format_date_series(df["trade_date"])
     if "limit_type" not in df.columns:
         df["limit_type"] = ""
     if "status" not in df.columns:
@@ -102,9 +113,9 @@ def _sentiment_by_date(limit_list_daily: pd.DataFrame) -> dict[str, dict[str, ob
 
     result: dict[str, dict[str, object]] = {}
     for trade_date, group in df.groupby("trade_date"):
-        up_mask = group["limit_type_text"].map(_is_limit_up)
-        down_mask = group["limit_type_text"].map(_is_limit_down)
-        break_mask = (group["open_times_num"] > 0) | group["status_text"].map(_is_break_board_status)
+        up_mask = _is_limit_up_series(group["limit_type_text"])
+        down_mask = _is_limit_down_series(group["limit_type_text"])
+        break_mask = (group["open_times_num"] > 0) | _is_break_board_status_series(group["status_text"])
         streak = _highest_streak(group)
         result[str(trade_date)] = {
             "limit_up_count": int(up_mask.sum()),
@@ -149,14 +160,40 @@ def _is_limit_up(value: object) -> bool:
     return "涨停" in text or "U" in text or "LIMIT_UP" in text
 
 
+def _is_limit_up_series(values: pd.Series) -> pd.Series:
+    text = values.fillna("").astype(str).str.upper()
+    return (
+        text.str.contains("涨停", regex=False, na=False)
+        | text.str.contains("U", regex=False, na=False)
+        | text.str.contains("LIMIT_UP", regex=False, na=False)
+    )
+
+
 def _is_limit_down(value: object) -> bool:
     text = str(value or "").upper()
     return "跌停" in text or "D" in text or "LIMIT_DOWN" in text
 
 
+def _is_limit_down_series(values: pd.Series) -> pd.Series:
+    text = values.fillna("").astype(str).str.upper()
+    return (
+        text.str.contains("跌停", regex=False, na=False)
+        | text.str.contains("D", regex=False, na=False)
+        | text.str.contains("LIMIT_DOWN", regex=False, na=False)
+    )
+
+
 def _is_break_board_status(value: object) -> bool:
     text = str(value or "")
     return any(keyword in text for keyword in ["炸板", "打开", "开板", "broken", "break"])
+
+
+def _is_break_board_status_series(values: pd.Series) -> pd.Series:
+    text = values.fillna("").astype(str)
+    mask = pd.Series(False, index=values.index)
+    for keyword in ["炸板", "打开", "开板", "broken", "break"]:
+        mask |= text.str.contains(keyword, regex=False, na=False)
+    return mask
 
 
 def _empty_sentiment() -> dict[str, object]:
@@ -195,3 +232,18 @@ def _format_date(value: object) -> str:
     if re.fullmatch(r"\d{8}", text):
         return pd.to_datetime(text, format="%Y%m%d").strftime("%Y-%m-%d")
     return pd.to_datetime(text).strftime("%Y-%m-%d")
+
+
+def _format_date_series(values: pd.Series) -> pd.Series:
+    text = values.fillna("").astype(str).str.strip()
+    digits_8 = text.str.fullmatch(r"\d{8}", na=False)
+    result = pd.Series("", index=values.index, dtype=object)
+    if digits_8.any():
+        result.loc[digits_8] = pd.to_datetime(
+            text.loc[digits_8],
+            format="%Y%m%d",
+            errors="coerce",
+        ).dt.strftime("%Y-%m-%d")
+    if (~digits_8).any():
+        result.loc[~digits_8] = pd.to_datetime(text.loc[~digits_8], errors="coerce").dt.strftime("%Y-%m-%d")
+    return result.fillna("")

@@ -306,7 +306,10 @@ def _normalize_trade_date_value(value: object) -> str:
 
 def _normalize_stock_code_series(series: pd.Series) -> pd.Series:
     values = series.fillna("").astype(str).str.strip()
-    return values.map(_normalize_stock_code)
+    six_digits = values.str.extract(r"(\d{6})", expand=False)
+    digits = values.str.replace(r"\D", "", regex=True)
+    normalized = six_digits.where(six_digits.notna(), digits.str.zfill(6).str[-6:])
+    return normalized.fillna("").where(digits.ne("") | six_digits.notna(), "")
 
 
 def _normalize_stock_code(value: str) -> str:

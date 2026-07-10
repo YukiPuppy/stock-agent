@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-import re
-
 import pandas as pd
 
 from src.strategy.base_strategy import SIGNAL_COLUMNS, empty_signals
 from src.strategy.breakout_volume_strategy import BreakoutVolumeStrategy
+from src.strategy.date_utils import TRADE_DATE_KEY_COLUMN, normalize_trade_date_series, normalize_trade_date_value
 from src.strategy.support_rebound_strategy import SupportReboundStrategy
 from src.strategy.trend_pullback_strategy import TrendPullbackStrategy
 
@@ -38,8 +37,12 @@ def generate_historical_signals_for_version(
         **params,
     }
     strategy = strategy_class(config)
-    trade_dates = _trade_dates(daily_factors, start_date, end_date)
-    frames = [strategy.generate_signals(daily_factors, trade_date=trade_date) for trade_date in trade_dates]
+    prepared_factors = _prepare_historical_factors(daily_factors)
+    daily_groups = _daily_factor_groups(prepared_factors, start_date, end_date)
+    frames = [
+        strategy.generate_signals(day_factors, trade_date=trade_date)
+        for trade_date, day_factors in daily_groups
+    ]
     frames = [frame for frame in frames if not frame.empty]
     if not frames:
         return empty_signals()
@@ -55,20 +58,19 @@ def generate_historical_signals_for_versions(
     start_date: str | None = None,
     end_date: str | None = None,
 ) -> pd.DataFrame:
+    if daily_factors.empty or "trade_date" not in daily_factors.columns:
+        return empty_signals()
+
+    prepared_factors = _prepare_historical_factors(daily_factors)
+    daily_groups = _daily_factor_groups(prepared_factors, start_date, end_date)
+    if not daily_groups:
+        return empty_signals()
+
     frames = []
     for version in versions:
         if not version.get("enabled", True):
             continue
-        frames.append(
-            generate_historical_signals_for_version(
-                daily_factors=daily_factors,
-                strategy_name=version["strategy_name"],
-                strategy_version=version["strategy_version"],
-                params=version.get("params", {}),
-                start_date=start_date,
-                end_date=end_date,
-            )
-        )
+        frames.append(_generate_signals_for_version_groups(version, daily_groups))
     frames = [frame for frame in frames if not frame.empty]
     if not frames:
         return empty_signals()
@@ -81,28 +83,71 @@ def generate_historical_signals_for_versions(
     return signals.loc[:, SIGNAL_COLUMNS].reset_index(drop=True)
 
 
-def _trade_dates(daily_factors: pd.DataFrame, start_date: str | None, end_date: str | None) -> list[str]:
-    trade_dates = daily_factors["trade_date"].dropna().astype(str).drop_duplicates().sort_values()
-    normalized_dates = trade_dates.map(_normalize_trade_date)
+def _generate_signals_for_version_groups(
+    version: dict,
+    daily_groups: list[tuple[str, pd.DataFrame]],
+) -> pd.DataFrame:
+    strategy_class = STRATEGY_CLASSES.get(version["strategy_name"])
+    if strategy_class is None:
+        raise ValueError(f"Unsupported strategy_name: {version['strategy_name']}")
+    strategy_version = version["strategy_version"]
+    config = {
+        "enabled": True,
+        "version": strategy_version,
+        "params": version.get("params", {}),
+        **version.get("params", {}),
+    }
+    strategy = strategy_class(config)
+    frames = [
+        strategy.generate_signals(day_factors, trade_date=trade_date)
+        for trade_date, day_factors in daily_groups
+    ]
+    frames = [frame for frame in frames if not frame.empty]
+    if not frames:
+        return empty_signals()
+
+    signals = pd.concat(frames, ignore_index=True)
+    signals["strategy_version"] = strategy_version
+    return signals.loc[:, SIGNAL_COLUMNS].reset_index(drop=True)
+
+
+def _prepare_historical_factors(daily_factors: pd.DataFrame) -> pd.DataFrame:
+    if TRADE_DATE_KEY_COLUMN in daily_factors.columns:
+        return daily_factors
+    prepared = daily_factors.copy()
+    prepared[TRADE_DATE_KEY_COLUMN] = normalize_trade_date_series(prepared["trade_date"])
+    return prepared
+
+
+def _daily_factor_groups(
+    daily_factors: pd.DataFrame,
+    start_date: str | None,
+    end_date: str | None,
+) -> list[tuple[str, pd.DataFrame]]:
+    keys = daily_factors[TRADE_DATE_KEY_COLUMN]
+    mask = keys.ne("")
     if start_date is not None:
-        normalized_start = _normalize_trade_date(start_date)
-        trade_dates = trade_dates[normalized_dates >= normalized_start]
-        normalized_dates = normalized_dates[normalized_dates >= normalized_start]
+        mask &= keys >= normalize_trade_date_value(start_date)
     if end_date is not None:
-        normalized_end = _normalize_trade_date(end_date)
-        trade_dates = trade_dates[normalized_dates <= normalized_end]
-        normalized_dates = normalized_dates[normalized_dates <= normalized_end]
+        mask &= keys <= normalize_trade_date_value(end_date)
+    selected = daily_factors.loc[mask]
+    if selected.empty:
+        return []
+    return [
+        (str(trade_date), group)
+        for trade_date, group in selected.groupby(TRADE_DATE_KEY_COLUMN, sort=True)
+    ]
+
+
+def _trade_dates(daily_factors: pd.DataFrame, start_date: str | None, end_date: str | None) -> list[str]:
+    normalized_dates = normalize_trade_date_series(daily_factors["trade_date"])
+    trade_dates = normalized_dates[normalized_dates.ne("")].drop_duplicates().sort_values()
+    if start_date is not None:
+        trade_dates = trade_dates[trade_dates >= normalize_trade_date_value(start_date)]
+    if end_date is not None:
+        trade_dates = trade_dates[trade_dates <= normalize_trade_date_value(end_date)]
     return trade_dates.tolist()
 
 
 def _normalize_trade_date(value: object) -> str:
-    if value is None or pd.isna(value):
-        return ""
-    text = str(value).strip()
-    digits = re.sub(r"\D", "", text)
-    if len(digits) == 8:
-        return digits
-    parsed = pd.to_datetime(text, errors="coerce")
-    if pd.isna(parsed):
-        return ""
-    return parsed.strftime("%Y%m%d")
+    return normalize_trade_date_value(value)

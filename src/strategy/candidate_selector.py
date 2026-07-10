@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-import re
-
+import numpy as np
 import pandas as pd
+
+from src.strategy.date_utils import TRADE_DATE_KEY_COLUMN, normalize_trade_date_series, normalize_trade_date_value
 
 
 CANDIDATE_COLUMNS = [
@@ -85,17 +86,20 @@ def select_candidates(
     if daily_factors.empty or "trade_date" not in daily_factors.columns:
         return _empty_candidates()
 
-    factors = daily_factors.copy()
-    selected_trade_date = _normalize_trade_date(trade_date) if trade_date is not None else None
-    factors["_trade_date_key"] = factors["trade_date"].map(_normalize_trade_date)
+    selected_trade_date = normalize_trade_date_value(trade_date) if trade_date is not None else None
+    trade_date_keys = (
+        daily_factors[TRADE_DATE_KEY_COLUMN]
+        if TRADE_DATE_KEY_COLUMN in daily_factors.columns
+        else normalize_trade_date_series(daily_factors["trade_date"])
+    )
     if selected_trade_date is None:
-        trade_dates = factors["_trade_date_key"].dropna()
+        trade_dates = trade_date_keys[trade_date_keys.ne("")]
         if trade_dates.empty:
             return _empty_candidates()
         selected_trade_date = str(trade_dates.max())
 
-    candidates = factors[factors["_trade_date_key"] == selected_trade_date].copy()
-    candidates = candidates.drop(columns=["_trade_date_key"], errors="ignore")
+    candidates = daily_factors.loc[trade_date_keys == selected_trade_date].copy()
+    candidates = candidates.drop(columns=[TRADE_DATE_KEY_COLUMN], errors="ignore")
     if candidates.empty:
         return _empty_candidates()
 
@@ -230,17 +234,20 @@ def select_candidates_from_signals(
     if strategy_signals.empty or "trade_date" not in strategy_signals.columns:
         return _empty_candidates()
 
-    signals = strategy_signals.copy()
-    selected_trade_date = _normalize_trade_date(trade_date) if trade_date is not None else None
-    signals["_trade_date_key"] = signals["trade_date"].map(_normalize_trade_date)
+    selected_trade_date = normalize_trade_date_value(trade_date) if trade_date is not None else None
+    trade_date_keys = (
+        strategy_signals[TRADE_DATE_KEY_COLUMN]
+        if TRADE_DATE_KEY_COLUMN in strategy_signals.columns
+        else normalize_trade_date_series(strategy_signals["trade_date"])
+    )
     if selected_trade_date is None:
-        trade_dates = signals["_trade_date_key"].dropna()
+        trade_dates = trade_date_keys[trade_date_keys.ne("")]
         if trade_dates.empty:
             return _empty_candidates()
         selected_trade_date = str(trade_dates.max())
 
-    signals = signals[signals["_trade_date_key"] == selected_trade_date].copy()
-    signals = signals.drop(columns=["_trade_date_key"], errors="ignore")
+    signals = strategy_signals.loc[trade_date_keys == selected_trade_date].copy()
+    signals = signals.drop(columns=[TRADE_DATE_KEY_COLUMN], errors="ignore")
     if signals.empty:
         return _empty_candidates()
 
@@ -268,7 +275,7 @@ def select_candidates_from_signals(
             on=["strategy_name", "strategy_version"],
             how="left",
         )
-        signals["strategy_weight"] = signals.apply(_strategy_weight_from_evaluation, axis=1)
+        signals["strategy_weight"] = _strategy_weights_from_evaluation(signals)
     else:
         signals["recommendation"] = ""
         signals["risk_level"] = ""
@@ -301,7 +308,7 @@ def select_candidates_from_signals(
     grouped = grouped[grouped["active_signal_count"] > 0].copy()
     if grouped.empty:
         return _empty_candidates()
-    grouped["reason"] = grouped.apply(_build_signal_candidate_reason, axis=1)
+    grouped["reason"] = _build_signal_candidate_reasons(grouped)
 
     factors = _factors_for_trade_date(daily_factors, selected_trade_date)
     if not factors.empty:
@@ -440,9 +447,13 @@ def _factors_for_trade_date(daily_factors: pd.DataFrame, trade_date: str) -> pd.
         "industry_amount_ratio_5",
         "industry_risk_flags",
     ]
-    selected_trade_date = _normalize_trade_date(trade_date)
-    factor_dates = daily_factors["trade_date"].map(_normalize_trade_date)
-    factors = daily_factors[factor_dates == selected_trade_date].copy()
+    selected_trade_date = normalize_trade_date_value(trade_date)
+    factor_dates = (
+        daily_factors[TRADE_DATE_KEY_COLUMN]
+        if TRADE_DATE_KEY_COLUMN in daily_factors.columns
+        else normalize_trade_date_series(daily_factors["trade_date"])
+    )
+    factors = daily_factors.loc[factor_dates == selected_trade_date].copy()
     for column in base_factor_columns:
         if column not in factors.columns:
             factors[column] = None
@@ -453,16 +464,7 @@ def _factors_for_trade_date(daily_factors: pd.DataFrame, trade_date: str) -> pd.
 
 
 def _normalize_trade_date(value: object) -> str:
-    if value is None or pd.isna(value):
-        return ""
-    text = str(value).strip()
-    digits = re.sub(r"\D", "", text)
-    if len(digits) == 8:
-        return digits
-    parsed = pd.to_datetime(text, errors="coerce")
-    if pd.isna(parsed):
-        return ""
-    return parsed.strftime("%Y%m%d")
+    return normalize_trade_date_value(value)
 
 
 def _join_unique_values(values: pd.Series) -> str:
@@ -502,7 +504,7 @@ def _apply_extension_filters_and_flags(
 
     for column in ["is_suspended", "is_limit_up_close", "is_limit_down_close"]:
         if column in result.columns:
-            result[column] = result[column].map(_to_bool).fillna(False).astype(bool)
+            result[column] = _to_bool_series(result[column])
     for column in [
         "turnover_rate",
         "turnover_rate_f",
@@ -612,11 +614,9 @@ def _apply_industry_adjustment(candidates: pd.DataFrame, available_columns: set[
     result = _append_flag_where(result, weak, "weak_industry")
 
     if "industry_risk_flags" in result.columns:
-        for index, value in result["industry_risk_flags"].fillna("").astype(str).items():
-            for flag in value.split(","):
-                flag = flag.strip()
-                if flag in {"strong_industry", "weak_industry", "shrinking_amount", "high_activity"}:
-                    result.at[index, "risk_flags"] = _append_flag(result.at[index, "risk_flags"], flag)
+        industry_flags = result["industry_risk_flags"].fillna("").astype(str)
+        for flag in ["strong_industry", "weak_industry", "shrinking_amount", "high_activity"]:
+            result = _append_flag_where(result, _contains_csv_flag(industry_flags, flag), flag)
     return result
 
 
@@ -641,21 +641,32 @@ def _apply_moneyflow_adjustment(candidates: pd.DataFrame, available_columns: set
         result = _append_flag_where(result, pd.Series(True, index=result.index), "missing_moneyflow")
 
     if "moneyflow_risk_flags" in result.columns:
-        for index, value in result["moneyflow_risk_flags"].fillna("").astype(str).items():
-            for flag in value.split(","):
-                flag = flag.strip()
-                if flag in {"main_outflow", "strong_main_outflow", "strong_main_inflow", "missing_moneyflow"}:
-                    result.at[index, "risk_flags"] = _append_flag(result.at[index, "risk_flags"], flag)
+        moneyflow_flags = result["moneyflow_risk_flags"].fillna("").astype(str)
+        for flag in ["main_outflow", "strong_main_outflow", "strong_main_inflow", "missing_moneyflow"]:
+            result = _append_flag_where(result, _contains_csv_flag(moneyflow_flags, flag), flag)
     return result
 
 
 def _append_flag_where(df: pd.DataFrame, mask: pd.Series, flag: str) -> pd.DataFrame:
-    result = df.copy()
-    if "risk_flags" not in result.columns:
-        result["risk_flags"] = ""
-    for index in result.index[mask.reindex(result.index, fill_value=False)]:
-        result.at[index, "risk_flags"] = _append_flag(result.at[index, "risk_flags"], flag)
-    return result
+    if "risk_flags" not in df.columns:
+        df["risk_flags"] = ""
+    aligned_mask = mask.reindex(df.index, fill_value=False).fillna(False).astype(bool)
+    if not aligned_mask.any():
+        return df
+
+    risk_flags = df["risk_flags"].fillna("").astype(str).str.strip()
+    needs_flag = aligned_mask & ~_contains_csv_flag(risk_flags, flag)
+    if not needs_flag.any():
+        return df
+
+    existing = risk_flags.loc[needs_flag]
+    df.loc[needs_flag, "risk_flags"] = np.where(existing.eq(""), flag, existing + "," + flag)
+    return df
+
+
+def _contains_csv_flag(values: pd.Series, flag: str) -> pd.Series:
+    normalized = values.fillna("").astype(str).str.replace(" ", "", regex=False)
+    return ("," + normalized + ",").str.contains(f",{flag},", regex=False, na=False)
 
 
 def _append_flag(value: object, flag: str) -> str:
@@ -726,6 +737,48 @@ def _to_bool(value: object) -> bool:
     return bool(value)
 
 
+def _to_bool_series(values: pd.Series) -> pd.Series:
+    if pd.api.types.is_bool_dtype(values):
+        return values.fillna(False).astype(bool)
+
+    text = values.fillna("").astype(str).str.strip().str.lower()
+    false_values = {"", "0", "false", "f", "no", "n", "none", "nan"}
+    true_values = {"1", "true", "t", "yes", "y"}
+    default_bool = values.fillna(False).astype(bool)
+    return pd.Series(
+        np.select(
+            [text.isin(false_values), text.isin(true_values)],
+            [False, True],
+            default=default_bool,
+        ),
+        index=values.index,
+    ).astype(bool)
+
+
+def _strategy_weights_from_evaluation(signals: pd.DataFrame) -> pd.Series:
+    recommendation_weights = {
+        "enable_observation": 1.20,
+        "observe": 1.00,
+        "continue_backtest": 0.80,
+        "reduce_or_pause": 0.50,
+        "pause": 0.00,
+    }
+    risk_multipliers = {
+        "low": 1.00,
+        "medium": 0.85,
+        "high": 0.60,
+        "unknown": 0.80,
+    }
+    recommendation = signals["recommendation"].fillna("").astype(str).str.strip()
+    risk_level = signals["risk_level"].fillna("").astype(str).str.strip()
+    base_weight = recommendation.replace(recommendation_weights)
+    risk_multiplier = risk_level.replace(risk_multipliers)
+    return (
+        pd.to_numeric(base_weight, errors="coerce").fillna(0.80)
+        * pd.to_numeric(risk_multiplier, errors="coerce").fillna(0.80)
+    )
+
+
 def _strategy_weight_from_evaluation(row: pd.Series) -> float:
     recommendation_weights = {
         "enable_observation": 1.20,
@@ -745,6 +798,27 @@ def _strategy_weight_from_evaluation(row: pd.Series) -> float:
     base_weight = recommendation_weights.get(recommendation, 0.80)
     risk_multiplier = risk_multipliers.get(risk_level, 0.80)
     return base_weight * risk_multiplier
+
+
+def _build_signal_candidate_reasons(rows: pd.DataFrame) -> pd.Series:
+    versions = rows["strategy_versions"].fillna("").astype(str)
+    names = rows["strategy_names"].fillna("").astype(str)
+    recommendations = rows["recommendations"].fillna("").astype(str)
+    entry_reason = rows["reason"].fillna("").astype(str)
+
+    reason = pd.Series("", index=rows.index, dtype=object)
+    strategy_part = pd.Series(
+        np.where(names.ne("") | versions.ne(""), "策略版本: " + names + " / " + versions, ""),
+        index=rows.index,
+    )
+    recommendation_part = pd.Series(
+        np.where(recommendations.ne(""), "评估建议: " + recommendations, ""),
+        index=rows.index,
+    )
+    for part in [strategy_part, recommendation_part, entry_reason]:
+        has_part = part.ne("")
+        reason = reason.where(~has_part, np.where(reason.eq(""), part, reason + "；" + part))
+    return reason
 
 
 def _build_signal_candidate_reason(row: pd.Series) -> str:

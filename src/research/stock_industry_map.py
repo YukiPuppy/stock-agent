@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import re
-
 import pandas as pd
 
 
@@ -31,7 +29,7 @@ def build_stock_industry_map(
 
     industry_column = _first_non_empty_column(basic, ("industry", "industry_name", "sw_industry", "board"))
     result = pd.DataFrame()
-    result["code"] = basic["code"].fillna("").astype(str).str.strip().map(_normalize_stock_code)
+    result["code"] = _normalize_stock_code_series(basic["code"])
     result["name"] = basic["name"].fillna("").astype(str).str.strip()
     result["industry_name"] = (
         basic[industry_column].fillna("").astype(str).str.strip() if industry_column is not None else ""
@@ -95,13 +93,18 @@ def _first_non_empty_column(df: pd.DataFrame, candidates: tuple[str, ...]) -> st
 
 
 def _normalize_stock_code(value: str) -> str:
-    match = re.search(r"\d{6}", value)
-    if match:
-        return match.group(0)
-    digits = re.sub(r"\D", "", value)
+    digits = "".join(character for character in value if character.isdigit())
     if digits:
         return digits.zfill(6)[-6:]
     return ""
+
+
+def _normalize_stock_code_series(series: pd.Series) -> pd.Series:
+    values = series.fillna("").astype(str).str.strip()
+    six_digits = values.str.extract(r"(\d{6})", expand=False)
+    digits = values.str.replace(r"\D", "", regex=True)
+    normalized = six_digits.where(six_digits.notna(), digits.str.zfill(6).str[-6:])
+    return normalized.fillna("").where(digits.ne("") | six_digits.notna(), "")
 
 
 def _normalize_sw_industry_components(df: pd.DataFrame) -> pd.DataFrame:
@@ -110,7 +113,7 @@ def _normalize_sw_industry_components(df: pd.DataFrame) -> pd.DataFrame:
         if column not in components.columns:
             components[column] = ""
     result = components.loc[:, ["code", "industry_code", "industry_name", "industry_level", "source"]].copy()
-    result["code"] = result["code"].fillna("").astype(str).str.strip().map(_normalize_stock_code)
+    result["code"] = _normalize_stock_code_series(result["code"])
     result["industry_code"] = result["industry_code"].fillna("").astype(str).str.strip()
     result["industry_name"] = result["industry_name"].fillna("").astype(str).str.strip()
     result["industry_level"] = result["industry_level"].fillna("").astype(str).str.strip()

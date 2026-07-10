@@ -73,6 +73,7 @@ def run_strategy_ops_workflow(
         "limit_param_combinations": limit_param_combinations,
         "skip_llm_agents": skip_llm_agents,
         "steps": [],
+        "profile_steps": [],
         "success_count": 0,
         "failed_count": 0,
         "skipped_count": 0,
@@ -237,6 +238,9 @@ def _run_or_skip(
                 summary[summary_key] = result
         elif isinstance(result, dict) and result.get(result_key):
             summary[summary_key] = result.get(result_key)
+    if isinstance(result, dict) and result.get("profile_steps"):
+        for profile_step in result["profile_steps"]:
+            summary["profile_steps"].append({"parent_step_name": step_name, **profile_step})
 
     elapsed = time.perf_counter() - started_at
     rows = _result_rows(result)
@@ -347,7 +351,31 @@ def _build_strategy_ops_markdown(summary: dict) -> str:
             f"- parameter_search_space_candidate JSON 路径: {summary.get('parameter_search_space_candidate_path') or '未生成'}",
             f"- system_health 报告路径: {summary.get('system_health_report_path') or '未生成'}",
             "",
-            "## 五、失败步骤",
+            "## 五、阶段级 Profiling",
+            "",
+            "| parent_step | function_name | status | rows | elapsed_seconds |",
+            "| --- | --- | --- | ---: | ---: |",
+        ]
+    )
+    profile_steps = summary.get("profile_steps", [])
+    if profile_steps:
+        for item in profile_steps:
+            lines.append(
+                "| {parent_step} | {function_name} | {status} | {rows} | {elapsed_seconds:.2f} |".format(
+                    parent_step=_markdown_cell(item.get("parent_step_name", "")),
+                    function_name=_markdown_cell(item.get("function_name", "")),
+                    status=_markdown_cell(item.get("status", "")),
+                    rows=int(item.get("rows", 0) or 0),
+                    elapsed_seconds=float(item.get("elapsed_seconds", 0.0) or 0.0),
+                )
+            )
+    else:
+        lines.append("| 未记录 | 未记录 | skipped | 0 | 0.00 |")
+
+    lines.extend(
+        [
+            "",
+            "## 六、失败步骤",
             "",
         ]
     )
@@ -357,7 +385,7 @@ def _build_strategy_ops_markdown(summary: dict) -> str:
     else:
         lines.append("- 无")
 
-    lines.extend(["", "## 六、错误 Traceback", ""])
+    lines.extend(["", "## 七、错误 Traceback", ""])
     failed_steps = [step for step in summary.get("steps", []) if step.get("status") == "failed"]
     if failed_steps:
         for step in failed_steps:
@@ -377,7 +405,7 @@ def _build_strategy_ops_markdown(summary: dict) -> str:
     lines.extend(
         [
             "",
-            "## 七、人工确认事项",
+            "## 八、人工确认事项",
             "",
             "- strategy_research_suggestions_*.json 只是研究建议；",
             "- parameter_search_space_candidate_*.json 只是候选参数；",

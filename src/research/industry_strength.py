@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 
 
@@ -69,9 +70,23 @@ def build_industry_strength(sw_daily: pd.DataFrame) -> pd.DataFrame:
     data["industry_strength_level"] = "weak"
     data.loc[data["industry_strength_score"] >= 30, "industry_strength_level"] = "neutral"
     data.loc[data["industry_strength_score"] >= 60, "industry_strength_level"] = "strong"
-    data["industry_risk_flags"] = data.apply(_risk_flags, axis=1)
+    data["industry_risk_flags"] = ""
+    data = _append_flag_where(data, data["industry_strength_level"].eq("weak"), "weak_industry")
+    data = _append_flag_where(data, data["industry_strength_level"].eq("strong"), "strong_industry")
+    amount_ratio = pd.to_numeric(data["industry_amount_ratio_5"], errors="coerce")
+    data = _append_flag_where(data, amount_ratio < 0.8, "shrinking_amount")
+    data = _append_flag_where(data, amount_ratio > 1.2, "high_activity")
 
     return data.loc[:, INDUSTRY_STRENGTH_COLUMNS].sort_values(["trade_date", "industry_code"]).reset_index(drop=True)
+
+
+def _append_flag_where(df: pd.DataFrame, mask: pd.Series, flag: str) -> pd.DataFrame:
+    aligned_mask = mask.reindex(df.index, fill_value=False).fillna(False).astype(bool)
+    if not aligned_mask.any():
+        return df
+    existing = df.loc[aligned_mask, "industry_risk_flags"].fillna("").astype(str).str.strip()
+    df.loc[aligned_mask, "industry_risk_flags"] = np.where(existing.eq(""), flag, existing + "," + flag)
+    return df
 
 
 def _risk_flags(row: pd.Series) -> str:
