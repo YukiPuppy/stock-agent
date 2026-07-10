@@ -4,9 +4,28 @@ import pandas as pd
 
 from src.strategy.base_strategy import BaseStrategy, SIGNAL_COLUMNS, empty_signals
 from src.strategy.breakout_volume_strategy import BreakoutVolumeStrategy
+from src.strategy.industry_rotation_strategy import IndustryRotationStrategy
+from src.strategy.low_vol_trend_strategy import LowVolTrendStrategy
+from src.strategy.moneyflow_accumulation_strategy import MoneyflowAccumulationStrategy
+from src.strategy.oversold_rebound_strategy import OversoldReboundStrategy
+from src.strategy.relative_strength_pullback_strategy import RelativeStrengthPullbackStrategy
 from src.strategy.strategy_config import get_strategy_config, is_strategy_enabled, load_strategy_config
 from src.strategy.support_rebound_strategy import SupportReboundStrategy
 from src.strategy.trend_pullback_strategy import TrendPullbackStrategy
+from src.strategy.volume_dryup_breakout_strategy import VolumeDryupBreakoutStrategy
+
+
+STRATEGY_CLASSES = [
+    TrendPullbackStrategy,
+    BreakoutVolumeStrategy,
+    SupportReboundStrategy,
+    IndustryRotationStrategy,
+    MoneyflowAccumulationStrategy,
+    LowVolTrendStrategy,
+    OversoldReboundStrategy,
+    VolumeDryupBreakoutStrategy,
+    RelativeStrengthPullbackStrategy,
+]
 
 
 def run_strategies(
@@ -19,7 +38,7 @@ def run_strategies(
         config = load_strategy_config(config_path)
         active_strategies = [
             strategy_class(get_strategy_config(strategy_class.name, config))
-            for strategy_class in [TrendPullbackStrategy, BreakoutVolumeStrategy, SupportReboundStrategy]
+            for strategy_class in STRATEGY_CLASSES
             if is_strategy_enabled(strategy_class.name, config)
         ]
     else:

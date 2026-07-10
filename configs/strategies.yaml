@@ -26,3 +26,27 @@ support_rebound:
   max_close_position_20: 0.75
   require_above_ma20: true
   min_amount_ma5: 0
+
+industry_rotation:
+  enabled: false
+  version: v1_strength_follow
+
+moneyflow_accumulation:
+  enabled: false
+  version: v1_main_inflow
+
+low_vol_trend:
+  enabled: false
+  version: v1_ma_alignment
+
+oversold_rebound:
+  enabled: false
+  version: v1_mild_oversold
+
+volume_dryup_breakout:
+  enabled: false
+  version: v1_dryup_recover
+
+relative_strength_pullback:
+  enabled: false
+  version: v1_rs_pullback

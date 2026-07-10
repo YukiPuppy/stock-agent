@@ -14,6 +14,7 @@ def build_historical_trade_plans(
     top_n: int = 20,
     max_plan_items: int = 5,
     min_amount_ma5: float = 0.0,
+    market_regime: pd.DataFrame | None = None,
     return_diagnostics: bool = False,
 ) -> pd.DataFrame | tuple[pd.DataFrame, dict[str, int]]:
     """Build deterministic historical trade plans for every signal date.
@@ -50,6 +51,7 @@ def build_historical_trade_plans(
             top_n=top_n,
             min_amount_ma5=min_amount_ma5,
             strategy_evaluation=strategy_evaluation,
+            market_regime=_market_regime_for_trade_date(market_regime, str(trade_date)),
         )
         diagnostics["historical_candidates"] += int(len(candidate_pool))
         trade_plan = generate_trade_plan(candidate_pool, max_items=max_plan_items).head(max_plan_items)
@@ -67,3 +69,19 @@ def build_historical_trade_plans(
     result = result.loc[:, TRADE_PLAN_COLUMNS].reset_index(drop=True)
     diagnostics["historical_trade_plans"] = int(len(result))
     return (result, diagnostics) if return_diagnostics else result
+
+
+def _market_regime_for_trade_date(market_regime: pd.DataFrame | None, trade_date: str) -> pd.DataFrame | None:
+    if market_regime is None or market_regime.empty or "trade_date" not in market_regime.columns:
+        return market_regime
+    values = market_regime["trade_date"].fillna("").astype(str).str.replace(r"\D", "", regex=True)
+    trade_date_key = str(trade_date).replace("-", "")
+    selected = market_regime.loc[values == trade_date_key].copy()
+    if not selected.empty:
+        return selected
+    before = market_regime.loc[values <= trade_date_key].copy()
+    if before.empty:
+        return pd.DataFrame()
+    return before.assign(_trade_date_key=values.loc[before.index]).sort_values("_trade_date_key").tail(1).drop(
+        columns=["_trade_date_key"]
+    )

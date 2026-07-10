@@ -5,14 +5,26 @@ import pandas as pd
 from src.strategy.base_strategy import SIGNAL_COLUMNS, empty_signals
 from src.strategy.breakout_volume_strategy import BreakoutVolumeStrategy
 from src.strategy.date_utils import TRADE_DATE_KEY_COLUMN, normalize_trade_date_series, normalize_trade_date_value
+from src.strategy.industry_rotation_strategy import IndustryRotationStrategy
+from src.strategy.low_vol_trend_strategy import LowVolTrendStrategy
+from src.strategy.moneyflow_accumulation_strategy import MoneyflowAccumulationStrategy
+from src.strategy.oversold_rebound_strategy import OversoldReboundStrategy
+from src.strategy.relative_strength_pullback_strategy import RelativeStrengthPullbackStrategy
 from src.strategy.support_rebound_strategy import SupportReboundStrategy
 from src.strategy.trend_pullback_strategy import TrendPullbackStrategy
+from src.strategy.volume_dryup_breakout_strategy import VolumeDryupBreakoutStrategy
 
 
 STRATEGY_CLASSES = {
     "trend_pullback": TrendPullbackStrategy,
     "breakout_volume": BreakoutVolumeStrategy,
     "support_rebound": SupportReboundStrategy,
+    "industry_rotation": IndustryRotationStrategy,
+    "moneyflow_accumulation": MoneyflowAccumulationStrategy,
+    "low_vol_trend": LowVolTrendStrategy,
+    "oversold_rebound": OversoldReboundStrategy,
+    "volume_dryup_breakout": VolumeDryupBreakoutStrategy,
+    "relative_strength_pullback": RelativeStrengthPullbackStrategy,
 }
 
 

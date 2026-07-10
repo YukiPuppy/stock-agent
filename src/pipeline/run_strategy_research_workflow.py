@@ -25,6 +25,8 @@ from src.pipeline.export_trade_plan_backtest_report import export_trade_plan_bac
 from src.pipeline.export_walk_forward_validation_report import export_walk_forward_validation_report
 from src.pipeline.search_strategy_params import run_parameter_search
 from src.pipeline.validate_strategy_oos import run_oos_validation
+from src.research.parameter_search import generate_search_versions, load_parameter_search_space
+from src.strategy.strategy_versions import iter_strategy_versions, load_strategy_versions
 
 
 def _resolve_db_path(db_path: str | None) -> str:
@@ -136,6 +138,50 @@ def _research_table_counts(db_path: str) -> dict[str, int]:
         for table_name in table_names:
             counts[table_name] = int(con.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0])
     return counts
+
+
+def build_dry_run_plan(
+    strategy_versions_config_path: str | None = None,
+    parameter_search_config_path: str | None = None,
+    limit_strategies: int | None = None,
+    limit_param_combinations: int | None = None,
+) -> dict[str, Any]:
+    versions = iter_strategy_versions(load_strategy_versions(strategy_versions_config_path))
+    if limit_strategies is not None:
+        versions = versions[: int(limit_strategies)]
+
+    search_config = load_parameter_search_space(parameter_search_config_path)
+    search_versions = generate_search_versions(
+        search_config,
+        limit_strategies=limit_strategies,
+        limit_param_combinations=limit_param_combinations,
+    )
+
+    parameter_combinations_by_strategy: dict[str, int] = {}
+    for version in search_versions:
+        strategy_name = str(version.get("strategy_name", ""))
+        parameter_combinations_by_strategy[strategy_name] = parameter_combinations_by_strategy.get(strategy_name, 0) + 1
+
+    strategy_version_rows = [
+        {
+            "strategy_name": version["strategy_name"],
+            "strategy_version": version["strategy_version"],
+        }
+        for version in versions
+    ]
+    return {
+        "enabled_strategy_versions_count": len(versions),
+        "strategy_versions": strategy_version_rows,
+        "parameter_search_combinations_count": len(search_versions),
+        "parameter_combinations_by_strategy": parameter_combinations_by_strategy,
+        "estimated_admission_candidates_count": len(versions) + len(search_versions),
+        "market_regime_gating": (
+            "candidate_selector reads market_regime when supplied; new strategies also honor "
+            "market_regime/risk_level columns if merged into factors"
+        ),
+        "limit_strategies": limit_strategies,
+        "limit_param_combinations": limit_param_combinations,
+    }
 
 
 def _log_current_and_total_rows(current_rows: dict[str, int], table_total_rows: dict[str, int]) -> None:
@@ -435,11 +481,32 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--candidate-config-path", default="configs/active_strategies_candidate.json")
     parser.add_argument("--limit-strategies", type=int, default=None)
     parser.add_argument("--limit-param-combinations", type=int, default=None)
+    parser.add_argument("--dry-run-plan", action="store_true")
     return parser.parse_args(argv)
 
 
 def main(argv: Sequence[str] | None = None) -> None:
     args = _parse_args(argv)
+    if args.dry_run_plan:
+        plan = build_dry_run_plan(
+            strategy_versions_config_path=args.strategy_versions_config_path,
+            parameter_search_config_path=args.parameter_search_config_path,
+            limit_strategies=args.limit_strategies,
+            limit_param_combinations=args.limit_param_combinations,
+        )
+        print("Strategy research dry-run plan.")
+        print(f"enabled strategy versions count: {plan['enabled_strategy_versions_count']}")
+        print("strategy versions:")
+        for row in plan["strategy_versions"]:
+            print(f"- {row['strategy_name']} / {row['strategy_version']}")
+        print(f"parameter search combinations count: {plan['parameter_search_combinations_count']}")
+        print("parameter combinations by strategy:")
+        for strategy_name, count in plan["parameter_combinations_by_strategy"].items():
+            print(f"- {strategy_name}: {count}")
+        print(f"estimated admission candidates count: {plan['estimated_admission_candidates_count']}")
+        print(f"market regime gating: {plan['market_regime_gating']}")
+        return
+
     summary = run_strategy_research_workflow(
         db_path=args.db_path,
         output_dir=args.output_dir,

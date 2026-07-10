@@ -388,3 +388,38 @@ def test_cli_no_report_and_no_candidate_config(monkeypatch, capsys):
     assert "active_candidate_config_path: None" in captured.out
     assert not any(name.startswith("export_") for name in _call_names(calls))
     assert _kwargs_for(calls, "strategy_admission")["export_candidate_config"] is False
+
+
+def test_dry_run_plan_reports_strategy_versions_and_parameter_counts():
+    plan = workflow.build_dry_run_plan()
+
+    assert plan["enabled_strategy_versions_count"] == 24
+    assert 250 <= plan["parameter_search_combinations_count"] <= 350
+    assert plan["parameter_combinations_by_strategy"]["industry_rotation"] == 24
+    assert plan["estimated_admission_candidates_count"] == 290
+
+
+def test_cli_dry_run_plan_outputs_counts(monkeypatch, capsys):
+    monkeypatch.setattr(
+        workflow,
+        "build_dry_run_plan",
+        lambda **kwargs: {
+            "enabled_strategy_versions_count": 2,
+            "strategy_versions": [
+                {"strategy_name": "trend_pullback", "strategy_version": "v1"},
+                {"strategy_name": "industry_rotation", "strategy_version": "v1_strength_follow"},
+            ],
+            "parameter_search_combinations_count": 3,
+            "parameter_combinations_by_strategy": {"trend_pullback": 1, "industry_rotation": 2},
+            "estimated_admission_candidates_count": 5,
+            "market_regime_gating": "enabled",
+        },
+    )
+
+    workflow.main(["--dry-run-plan"])
+
+    captured = capsys.readouterr()
+    assert "enabled strategy versions count: 2" in captured.out
+    assert "industry_rotation / v1_strength_follow" in captured.out
+    assert "parameter search combinations count: 3" in captured.out
+    assert "estimated admission candidates count: 5" in captured.out

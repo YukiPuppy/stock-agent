@@ -38,6 +38,10 @@ def run_trade_plan_backtest(
     daily_factors = store.load_daily_factors(start_date=start_date, end_date=end_date)
     daily_bars = store.load_daily_bars(start_date=start_date, end_date=end_date)
     stock_basic = store.load_stock_basic()
+    try:
+        market_regime = store.load_market_regime()
+    except Exception:
+        market_regime = pd.DataFrame()
     if strategy_evaluation is None:
         try:
             strategy_evaluation = store.load_strategy_version_evaluation(run_id=run_id)
@@ -52,6 +56,7 @@ def run_trade_plan_backtest(
         top_n=top_n,
         max_plan_items=max_plan_items,
         min_amount_ma5=min_amount_ma5,
+        market_regime=market_regime,
         return_diagnostics=True,
     )
     if run_id is not None:
