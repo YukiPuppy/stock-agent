@@ -53,9 +53,17 @@ def build_stock_industry_map(
             result.loc[matched, "industry_name"] = result.loc[matched, "industry_name_component"]
             result.loc[matched, "industry_code"] = result.loc[matched, "industry_code_component"]
             result.loc[matched, "industry_level"] = result.loc[matched, "industry_level_component"]
-            result.loc[matched, "source"] = "sw_component_code_match"
+            result.loc[matched, "source"] = result.loc[matched, "source_component"].where(
+                result.loc[matched, "source_component"].fillna("").astype(str).str.strip() != "",
+                "sw_component_code_match",
+            )
             result = result.drop(
-                columns=["industry_name_component", "industry_code_component", "industry_level_component"]
+                columns=[
+                    "industry_name_component",
+                    "industry_code_component",
+                    "industry_level_component",
+                    "source_component",
+                ]
             )
 
     if sw_industry_classification is not None and not sw_industry_classification.empty:
@@ -98,14 +106,15 @@ def _normalize_stock_code(value: str) -> str:
 
 def _normalize_sw_industry_components(df: pd.DataFrame) -> pd.DataFrame:
     components = df.copy()
-    for column in ["code", "industry_code", "industry_name", "industry_level"]:
+    for column in ["code", "industry_code", "industry_name", "industry_level", "source"]:
         if column not in components.columns:
             components[column] = ""
-    result = components.loc[:, ["code", "industry_code", "industry_name", "industry_level"]].copy()
+    result = components.loc[:, ["code", "industry_code", "industry_name", "industry_level", "source"]].copy()
     result["code"] = result["code"].fillna("").astype(str).str.strip().map(_normalize_stock_code)
     result["industry_code"] = result["industry_code"].fillna("").astype(str).str.strip()
     result["industry_name"] = result["industry_name"].fillna("").astype(str).str.strip()
     result["industry_level"] = result["industry_level"].fillna("").astype(str).str.strip()
+    result["source"] = result["source"].fillna("").astype(str).str.strip()
     result = result[(result["code"] != "") & (result["industry_code"] != "")]
     return result.drop_duplicates(subset=["code"], keep="last").reset_index(drop=True)
 

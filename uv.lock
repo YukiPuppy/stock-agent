@@ -1880,6 +1880,7 @@ dependencies = [
     { name = "python-dotenv" },
     { name = "requests" },
     { name = "streamlit" },
+    { name = "tnskhdata" },
     { name = "tushare" },
 ]
 
@@ -1903,6 +1904,7 @@ requires-dist = [
     { name = "python-dotenv", specifier = ">=1.2.2" },
     { name = "requests", specifier = ">=2.34.2" },
     { name = "streamlit", specifier = ">=1.58.0" },
+    { name = "tnskhdata", specifier = "==0.1.1" },
     { name = "tushare", specifier = ">=1.4.29" },
 ]
 
@@ -1960,6 +1962,24 @@ source = { registry = "https://pypi.tuna.tsinghua.edu.cn/simple" }
 sdist = { url = "https://pypi.tuna.tsinghua.edu.cn/packages/47/c6/ee486fd809e357697ee8a44d3d69222b344920433d3b6666ccd9b374630c/tenacity-9.1.4.tar.gz", hash = "sha256:adb31d4c263f2bd041081ab33b498309a57c77f9acf2db65aadf0898179cf93a", size = 49413, upload-time = "2026-02-07T10:45:33.841Z" }
 wheels = [
     { url = "https://pypi.tuna.tsinghua.edu.cn/packages/d7/c1/eb8f9debc45d3b7918a32ab756658a0904732f75e555402972246b0b8e71/tenacity-9.1.4-py3-none-any.whl", hash = "sha256:6095a360c919085f28c6527de529e76a06ad89b23659fa881ae0649b867a9d55", size = 28926, upload-time = "2026-02-07T10:45:32.24Z" },
+]
+
+[[package]]
+name = "tnskhdata"
+version = "0.1.1"
+source = { registry = "https://pypi.tuna.tsinghua.edu.cn/simple" }
+dependencies = [
+    { name = "beautifulsoup4" },
+    { name = "lxml" },
+    { name = "pandas" },
+    { name = "requests" },
+    { name = "simplejson" },
+    { name = "tqdm" },
+    { name = "websocket-client" },
+]
+sdist = { url = "https://pypi.tuna.tsinghua.edu.cn/packages/e7/8c/e6123a22d8f63ddd60211e186c2a918f5d6785708dbd7216ab45bf0066a7/tnskhdata-0.1.1.tar.gz", hash = "sha256:5868895a2687263b60e5921480c7f262322b670d96d3e88baf7304a31ee1c120", size = 120307, upload-time = "2026-06-29T10:44:20.661Z" }
+wheels = [
+    { url = "https://pypi.tuna.tsinghua.edu.cn/packages/17/f2/0ed3358d541f8f22dd3a14942abd0b853101ad1d9b1f35110e598d2e6ae5/tnskhdata-0.1.1-py3-none-any.whl", hash = "sha256:faf6a1946994daa7686b5b4f733bde594bdb0390a37fb3c2138e5224e0db447f", size = 142269, upload-time = "2026-06-29T10:44:18.713Z" },
 ]
 
 [[package]]

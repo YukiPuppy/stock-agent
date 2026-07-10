@@ -21,7 +21,11 @@ def update_sw_industry_classification(
     sw_classification = provider.get_sw_industry_classification(level=level, src=src)
     store.save_sw_industry_classification(sw_classification)
     stock_basic = store.load_stock_basic()
-    stock_industry_map = build_stock_industry_map(stock_basic, sw_classification)
+    if hasattr(provider, "get_sw_industry_members"):
+        sw_industry_members = provider.get_sw_industry_members(sw_classification)
+    else:
+        sw_industry_members = None
+    stock_industry_map = build_stock_industry_map(stock_basic, sw_classification, sw_industry_members)
     store.save_stock_industry_map(stock_industry_map)
     return sw_classification, stock_industry_map, resolved_db_path
 

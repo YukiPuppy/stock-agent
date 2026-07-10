@@ -585,12 +585,43 @@ class StockAgentStore:
         return self._load_extension_table("market_regime", MARKET_REGIME_COLUMNS, conditions, params)
 
     def save_sw_industry_classification(self, df: pd.DataFrame) -> None:
-        self._save_extension_table(
-            df,
-            "sw_industry_classification",
-            SW_INDUSTRY_CLASSIFICATION_COLUMNS,
-            ["industry_code", "level", "src"],
+        self._ensure_parent_dir()
+        normalized = self._normalize_dataframe(df, SW_INDUSTRY_CLASSIFICATION_COLUMNS).drop_duplicates(
+            subset=["industry_code", "level", "src"],
+            keep="last",
         )
+
+        with self._connect() as con:
+            self._create_tables(con)
+            if normalized.empty:
+                return
+            con.register("incoming_sw_industry_classification", normalized)
+            con.execute("BEGIN TRANSACTION")
+            try:
+                con.execute(
+                    """
+                    DELETE FROM sw_industry_classification
+                    USING (
+                        SELECT DISTINCT level, src
+                        FROM incoming_sw_industry_classification
+                    ) incoming_scope
+                    WHERE sw_industry_classification.level = incoming_scope.level
+                      AND sw_industry_classification.src = incoming_scope.src
+                    """
+                )
+                con.execute(
+                    f"""
+                    INSERT INTO sw_industry_classification ({", ".join(SW_INDUSTRY_CLASSIFICATION_COLUMNS)})
+                    SELECT {", ".join(SW_INDUSTRY_CLASSIFICATION_COLUMNS)}
+                    FROM incoming_sw_industry_classification
+                    """
+                )
+                con.execute("COMMIT")
+            except Exception:
+                con.execute("ROLLBACK")
+                raise
+            finally:
+                con.unregister("incoming_sw_industry_classification")
 
     def load_sw_industry_classification(self, level: str | None = None) -> pd.DataFrame:
         conditions = []

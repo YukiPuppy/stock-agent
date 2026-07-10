@@ -103,6 +103,14 @@ SW_INDUSTRY_CLASSIFICATION_COLUMNS = [
     "is_pub",
     "sort_code",
 ]
+SW_INDUSTRY_MEMBER_COLUMNS = [
+    "code",
+    "name",
+    "industry_code",
+    "industry_name",
+    "industry_level",
+    "source",
+]
 SW_DAILY_COLUMNS = [
     "trade_date",
     "industry_code",
@@ -400,7 +408,7 @@ def normalize_tushare_sw_industry_classification(df: pd.DataFrame) -> pd.DataFra
     if df.empty:
         return _empty_with_columns(SW_INDUSTRY_CLASSIFICATION_COLUMNS)
 
-    code_column = _first_existing_column(df, ("industry_code", "index_code", "ts_code", "code"))
+    code_column = _first_existing_column(df, ("index_code", "ts_code", "code", "industry_code"))
     name_column = _first_existing_column(df, ("industry_name", "name", "index_name"))
     if code_column is None:
         raise ValueError("Tushare index_classify data missing required industry code column")
@@ -426,6 +434,56 @@ def normalize_tushare_sw_industry_classification(df: pd.DataFrame) -> pd.DataFra
         .sort_values(["level", "industry_code"])
         .reset_index(drop=True)
     )
+
+
+def normalize_tushare_sw_industry_members(
+    df: pd.DataFrame,
+    sw_industry_classification: pd.DataFrame | None = None,
+    source: str = "sw2021_member",
+) -> pd.DataFrame:
+    """Normalize Tushare SW industry constituent output to stock-industry map fields."""
+    if df.empty:
+        return _empty_with_columns(SW_INDUSTRY_MEMBER_COLUMNS)
+
+    code_column = _first_existing_column(df, ("ts_code", "con_code", "code"))
+    industry_code_column = _first_existing_column(df, ("l1_code", "index_code", "industry_code"))
+    name_column = _first_existing_column(df, ("name", "con_name", "stock_name"))
+    industry_name_column = _first_existing_column(df, ("l1_name", "industry_name", "index_name"))
+    if code_column is None:
+        raise ValueError("Tushare SW industry member data missing required stock code column")
+    if industry_code_column is None:
+        raise ValueError("Tushare SW industry member data missing required industry code column")
+
+    industry_names = _sw_industry_name_map(sw_industry_classification)
+    raw = df.copy()
+    if "is_new" in raw.columns:
+        raw = raw[raw["is_new"].fillna("").astype(str).str.upper().ne("N")]
+
+    result = pd.DataFrame()
+    result["code"] = raw[code_column].map(ts_code_to_code)
+    result["name"] = raw[name_column].fillna("").astype(str).str.strip() if name_column else ""
+    result["industry_code"] = raw[industry_code_column].fillna("").astype(str).str.strip().str.upper()
+    if industry_name_column is not None:
+        result["industry_name"] = raw[industry_name_column].fillna("").astype(str).str.strip()
+    else:
+        result["industry_name"] = result["industry_code"].map(industry_names).fillna("")
+    result["industry_level"] = "L1"
+    result["source"] = source
+    result = result[(result["code"] != "") & (result["industry_code"] != "")]
+    return result.loc[:, SW_INDUSTRY_MEMBER_COLUMNS].drop_duplicates(subset=["code"], keep="last").reset_index(drop=True)
+
+
+def _sw_industry_name_map(sw_industry_classification: pd.DataFrame | None) -> dict[str, str]:
+    if sw_industry_classification is None or sw_industry_classification.empty:
+        return {}
+    classification = sw_industry_classification.copy()
+    code_column = _first_existing_column(classification, ("index_code", "industry_code", "ts_code", "code"))
+    name_column = _first_existing_column(classification, ("industry_name", "name", "index_name"))
+    if code_column is None or name_column is None:
+        return {}
+    keys = classification[code_column].fillna("").astype(str).str.strip().str.upper()
+    values = classification[name_column].fillna("").astype(str).str.strip()
+    return dict(zip(keys, values, strict=False))
 
 
 def normalize_tushare_sw_daily(df: pd.DataFrame) -> pd.DataFrame:
@@ -631,6 +689,84 @@ class TushareProvider(BaseDataProvider):
             result["src"] = result["src"].where(result["src"].astype(str).str.strip() != "", str(src))
         return result
 
+    def get_sw_industry_members(
+        self,
+        sw_industry_classification: pd.DataFrame | None = None,
+    ) -> pd.DataFrame:
+        """Return SW2021 L1 stock constituents from supported Tushare proxy endpoints."""
+        classification = sw_industry_classification
+        index_codes = _sw_index_codes(classification)
+        frames: list[pd.DataFrame] = []
+
+        try:
+            for index_code in index_codes:
+                with no_proxy_context(settings.DATA_FETCH_DISABLE_PROXY):
+                    raw = self._pro.index_member(index_code=index_code)
+                if raw is None or raw.empty:
+                    continue
+                raw = raw.copy()
+                if "index_code" not in raw.columns:
+                    raw["index_code"] = index_code
+                frames.append(raw)
+            if frames:
+                return normalize_tushare_sw_industry_members(
+                    pd.concat(frames, ignore_index=True),
+                    sw_industry_classification=classification,
+                    source="sw2021_member",
+                )
+        except Exception:
+            frames = []
+
+        member_all = self._fetch_index_member_all()
+        if not member_all.empty:
+            if index_codes and "l1_code" in member_all.columns:
+                member_all = member_all[member_all["l1_code"].astype(str).str.upper().isin(index_codes)]
+            return normalize_tushare_sw_industry_members(
+                member_all,
+                sw_industry_classification=classification,
+                source="sw2021_member",
+            )
+
+        try:
+            for index_code in index_codes:
+                with no_proxy_context(settings.DATA_FETCH_DISABLE_PROXY):
+                    raw = self._pro.index_weight(index_code=index_code)
+                if raw is None or raw.empty:
+                    continue
+                raw = raw.copy()
+                if "index_code" not in raw.columns:
+                    raw["index_code"] = index_code
+                frames.append(raw)
+            if frames:
+                return normalize_tushare_sw_industry_members(
+                    pd.concat(frames, ignore_index=True),
+                    sw_industry_classification=classification,
+                    source="sw2021_member",
+                )
+        except Exception:
+            frames = []
+
+        return _empty_with_columns(SW_INDUSTRY_MEMBER_COLUMNS)
+
+    def _fetch_index_member_all(self, page_size: int = 3000) -> pd.DataFrame:
+        frames: list[pd.DataFrame] = []
+        offset = 0
+        while True:
+            try:
+                with no_proxy_context(settings.DATA_FETCH_DISABLE_PROXY):
+                    raw = self._pro.index_member_all(offset=offset, limit=page_size)
+            except Exception:
+                return pd.DataFrame()
+            if raw is None or raw.empty:
+                break
+            frames.append(raw)
+            if len(raw) < page_size:
+                break
+            offset += page_size
+        if not frames:
+            return pd.DataFrame()
+        return pd.concat(frames, ignore_index=True).drop_duplicates().reset_index(drop=True)
+
     def get_sw_daily(
         self,
         trade_date: str | None = None,
@@ -662,3 +798,13 @@ def _date_range_params(
     if end_date is not None:
         params["end_date"] = re.sub(r"\D", "", str(end_date))
     return params
+
+
+def _sw_index_codes(sw_industry_classification: pd.DataFrame | None) -> list[str]:
+    if sw_industry_classification is None or sw_industry_classification.empty:
+        return []
+    code_column = _first_existing_column(sw_industry_classification, ("index_code", "industry_code", "ts_code", "code"))
+    if code_column is None:
+        return []
+    codes = sw_industry_classification[code_column].fillna("").astype(str).str.strip().str.upper()
+    return [code for code in codes.drop_duplicates().tolist() if code]

@@ -257,6 +257,37 @@ def test_save_and_load_industry_tables(tmp_path):
     assert store.load_industry_strength("2025-01-02").loc[0, "industry_strength_level"] == "strong"
 
 
+def test_save_sw_industry_classification_replaces_same_level_and_src(tmp_path):
+    store = StockAgentStore(str(tmp_path / "stock_agent.duckdb"))
+    store.save_sw_industry_classification(
+        pd.DataFrame(
+            [
+                {"industry_code": "110000", "industry_name": "旧农林牧渔", "level": "L1", "src": "SW2021"},
+                {"industry_code": "801010.SI", "industry_name": "旧其他源", "level": "L1", "src": "SW2024"},
+            ]
+        )
+    )
+    store.save_sw_industry_classification(
+        pd.DataFrame(
+            [
+                {
+                    "industry_code": "801010.SI",
+                    "industry_name": "农林牧渔",
+                    "level": "L1",
+                    "src": "SW2021",
+                    "index_code": "801010.SI",
+                }
+            ]
+        )
+    )
+
+    result = store.load_sw_industry_classification()
+
+    assert result["industry_code"].tolist() == ["801010.SI", "801010.SI"]
+    assert "旧农林牧渔" not in result["industry_name"].tolist()
+    assert "旧其他源" in result["industry_name"].tolist()
+
+
 def test_save_and_load_data_quality_tables(tmp_path):
     store = StockAgentStore(str(tmp_path / "stock_agent.duckdb"))
     store.save_data_quality_report(

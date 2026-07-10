@@ -18,6 +18,7 @@ from src.data_providers.tushare_provider import (
     normalize_tushare_moneyflow,
     normalize_tushare_sw_daily,
     normalize_tushare_sw_industry_classification,
+    normalize_tushare_sw_industry_members,
     normalize_tushare_stock_limits,
     normalize_tushare_suspend_daily,
     normalize_tushare_stock_basic,
@@ -245,6 +246,48 @@ def test_normalize_tushare_sw_industry_classification_outputs_standard_fields():
     assert result.loc[0, "industry_name"] == "农林牧渔"
 
 
+def test_normalize_tushare_sw_industry_classification_prefers_index_code_as_join_key():
+    raw = pd.DataFrame(
+        {
+            "index_code": ["801010.SI"],
+            "industry_code": ["110000"],
+            "industry_name": ["农林牧渔"],
+            "level": ["L1"],
+            "src": ["SW2021"],
+        }
+    )
+
+    result = normalize_tushare_sw_industry_classification(raw)
+
+    assert result.loc[0, "industry_code"] == "801010.SI"
+    assert result.loc[0, "index_code"] == "801010.SI"
+
+
+def test_normalize_tushare_sw_industry_members_outputs_map_fields():
+    raw = pd.DataFrame(
+        {
+            "l1_code": ["801010.SI", "801030.SI"],
+            "l1_name": ["农林牧渔", "基础化工"],
+            "ts_code": ["000001.SZ", "600000.SH"],
+            "name": ["平安银行", "浦发银行"],
+            "is_new": ["Y", "N"],
+        }
+    )
+
+    result = normalize_tushare_sw_industry_members(raw)
+
+    assert result.to_dict("records") == [
+        {
+            "code": "000001",
+            "name": "平安银行",
+            "industry_code": "801010.SI",
+            "industry_name": "农林牧渔",
+            "industry_level": "L1",
+            "source": "sw2021_member",
+        }
+    ]
+
+
 def test_normalize_tushare_sw_daily_outputs_standard_fields():
     raw = pd.DataFrame(
         {
@@ -360,6 +403,44 @@ def test_tushare_provider_get_moneyflow_uses_mock_pro(monkeypatch):
     assert provider._pro.kwargs["trade_date"] == "20250102"
     assert provider._pro.kwargs["ts_code"] == "000001.SZ"
     assert result.loc[0, "code"] == "000001"
+
+
+def test_tushare_provider_get_sw_industry_members_uses_index_member_all_pages(monkeypatch):
+    class FakePro:
+        def __init__(self):
+            self.calls = []
+
+        def index_member(self, **kwargs):
+            raise Exception("No such method: index_member")
+
+        def index_member_all(self, **kwargs):
+            self.calls.append(kwargs)
+            if kwargs["offset"] == 0:
+                return pd.DataFrame(
+                    [
+                        {
+                            "l1_code": "801010.SI",
+                            "l1_name": "农林牧渔",
+                            "ts_code": "000001.SZ",
+                            "name": "平安银行",
+                            "is_new": "Y",
+                        }
+                    ]
+                )
+            return pd.DataFrame()
+
+    provider = object.__new__(TushareProvider)
+    provider._pro = FakePro()
+    classification = pd.DataFrame(
+        [{"index_code": "801010.SI", "industry_code": "801010.SI", "industry_name": "农林牧渔"}]
+    )
+
+    result = provider.get_sw_industry_members(classification)
+
+    assert provider._pro.calls == [{"offset": 0, "limit": 3000}]
+    assert result.loc[0, "code"] == "000001"
+    assert result.loc[0, "industry_code"] == "801010.SI"
+    assert result.loc[0, "source"] == "sw2021_member"
 
 
 def test_tushare_provider_raises_clear_error_without_token(monkeypatch):

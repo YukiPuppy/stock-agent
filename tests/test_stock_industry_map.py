@@ -73,3 +73,20 @@ def test_build_stock_industry_map_matches_sw_components_by_code():
     assert result.loc["000001", "industry_code"] == "801780.SI"
     assert result.loc["000001", "source"] == "sw_component_code_match"
     assert result.loc["000002", "industry_code"] == ""
+
+
+def test_build_stock_industry_map_uses_component_source_when_present():
+    stock_basic = pd.DataFrame({"code": ["000001"], "name": ["平安银行"]})
+    components = pd.DataFrame(
+        {
+            "code": ["000001.SZ"],
+            "industry_name": ["银行"],
+            "industry_code": ["801780.SI"],
+            "industry_level": ["L1"],
+            "source": ["sw2021_member"],
+        }
+    )
+
+    result = build_stock_industry_map(stock_basic, sw_industry_components=components)
+
+    assert result.loc[0, "source"] == "sw2021_member"
