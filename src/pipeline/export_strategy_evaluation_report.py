@@ -7,6 +7,8 @@ from collections.abc import Sequence
 from datetime import date
 from pathlib import Path
 
+import pandas as pd
+
 from src.config.settings import DB_PATH
 from src.database.duckdb_store import StockAgentStore
 from src.reports.strategy_evaluation_report import generate_strategy_evaluation_report
@@ -20,12 +22,17 @@ def export_strategy_evaluation_report(
     db_path: str | None = None,
     output_dir: str = "reports",
     report_date: str | None = None,
+    evaluation: pd.DataFrame | None = None,
+    performance: pd.DataFrame | None = None,
+    run_id: str | None = None,
 ) -> str:
     """Read persisted strategy evaluation data, render Markdown, write it, and return the path."""
     resolved_db_path = _resolve_db_path(db_path)
     store = StockAgentStore(resolved_db_path)
-    evaluation = store.load_strategy_version_evaluation()
-    performance = store.load_strategy_version_performance()
+    if evaluation is None:
+        evaluation = store.load_strategy_version_evaluation(run_id=run_id)
+    if performance is None:
+        performance = store.load_strategy_version_performance(run_id=run_id)
     resolved_report_date = report_date or date.today().isoformat()
     report = generate_strategy_evaluation_report(
         evaluation=evaluation,

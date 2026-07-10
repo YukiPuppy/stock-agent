@@ -62,3 +62,41 @@ def test_run_strategy_admission_reads_duckdb_saves_and_exports_candidate_config(
     assert len(saved) == 1
     assert saved.loc[0, "admission_recommendation"] == "enable_observation_candidate"
     assert config["active_strategy_candidates"][0]["strategy_name"] == "trend"
+
+
+def test_run_strategy_admission_uses_current_inputs_instead_of_historical_parameter_results(tmp_path):
+    db_path = tmp_path / "stock_agent.duckdb"
+    store = StockAgentStore(str(db_path))
+    store.save_parameter_search_results(
+        pd.DataFrame(
+            {
+                "strategy_name": ["historical_strategy"],
+                "strategy_version": ["search_old"],
+                "valid_count": [100],
+                "evaluation_score": [99.0],
+                "recommendation": ["enable_observation"],
+            }
+        )
+    )
+
+    current_parameter_results = pd.DataFrame(
+        {
+            "strategy_name": ["current_strategy"],
+            "strategy_version": ["search_current"],
+            "valid_count": [40],
+            "evaluation_score": [45.0],
+            "recommendation": ["enable_observation"],
+        }
+    )
+    admission = run_strategy_admission(
+        db_path=str(db_path),
+        parameter_search_results=current_parameter_results,
+        strategy_evaluation=pd.DataFrame(),
+        walk_forward_validation=pd.DataFrame(),
+        trade_plan_backtest_performance=pd.DataFrame(),
+        run_id="run-current-only",
+    )
+
+    assert admission["strategy_name"].tolist() == ["current_strategy"]
+    assert "historical_strategy" not in set(admission["strategy_name"])
+    assert store.load_strategy_admission(run_id="run-current-only")["strategy_name"].tolist() == ["current_strategy"]

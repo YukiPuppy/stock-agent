@@ -26,10 +26,13 @@ def run_strategy_version_evaluation(
     min_win_rate_3d: float = 0.50,
     min_avg_return_3d: float = 0.0,
     max_avg_drawdown_3d: float = -0.08,
+    performance: pd.DataFrame | None = None,
+    run_id: str | None = None,
 ) -> pd.DataFrame:
     resolved_db_path = _resolve_db_path(db_path)
     store = StockAgentStore(resolved_db_path)
-    performance = store.load_strategy_version_performance()
+    if performance is None:
+        performance = store.load_strategy_version_performance()
     evaluation = evaluate_strategy_versions(
         performance,
         min_valid_count=min_valid_count,
@@ -37,6 +40,8 @@ def run_strategy_version_evaluation(
         min_avg_return_3d=min_avg_return_3d,
         max_avg_drawdown_3d=max_avg_drawdown_3d,
     )
+    if run_id is not None:
+        evaluation = evaluation.assign(run_id=run_id)
     store.save_strategy_version_evaluation(evaluation)
     return evaluation
 

@@ -23,7 +23,9 @@ def run_strategy_version_backtest(
     config_path: str | None = None,
     db_path: str | None = None,
     limit_strategies: int | None = None,
-) -> tuple[pd.DataFrame, pd.DataFrame]:
+    run_id: str | None = None,
+    return_signals: bool = False,
+) -> tuple[pd.DataFrame, pd.DataFrame] | tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     resolved_db_path = _resolve_db_path(db_path)
     store = StockAgentStore(resolved_db_path)
     daily_factors = store.load_daily_factors(start_date=start_date, end_date=end_date)
@@ -42,9 +44,16 @@ def run_strategy_version_backtest(
     backtest_results = backtest_strategy_signals(strategy_signals, daily_bars)
     strategy_version_performance = evaluate_strategy_performance(backtest_results)
 
+    if run_id is not None:
+        strategy_signals = strategy_signals.assign(run_id=run_id)
+        backtest_results = backtest_results.assign(run_id=run_id)
+        strategy_version_performance = strategy_version_performance.assign(run_id=run_id)
+
     store.save_backtest_results(backtest_results)
     store.save_strategy_version_performance(strategy_version_performance)
 
+    if return_signals:
+        return backtest_results, strategy_version_performance, strategy_signals
     return backtest_results, strategy_version_performance
 
 

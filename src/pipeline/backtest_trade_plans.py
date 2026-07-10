@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 from collections.abc import Sequence
 
 import pandas as pd
@@ -23,19 +24,27 @@ def run_trade_plan_backtest(
     max_plan_items: int = 5,
     min_amount_ma5: float = 0.0,
     max_holding_days: int = 5,
-) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    strategy_signals: pd.DataFrame | None = None,
+    strategy_evaluation: pd.DataFrame | None = None,
+    run_id: str | None = None,
+    return_diagnostics: bool = False,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame] | tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, dict[str, int]]:
     resolved_db_path = _resolve_db_path(db_path)
     store = StockAgentStore(resolved_db_path)
-    strategy_signals = store.load_strategy_signals(start_date=start_date, end_date=end_date)
+    if strategy_signals is None:
+        strategy_signals = store.load_strategy_signals(start_date=start_date, end_date=end_date)
+    else:
+        strategy_signals = _normalize_current_strategy_signals(strategy_signals)
     daily_factors = store.load_daily_factors(start_date=start_date, end_date=end_date)
     daily_bars = store.load_daily_bars(start_date=start_date, end_date=end_date)
     stock_basic = store.load_stock_basic()
-    try:
-        strategy_evaluation = store.load_strategy_version_evaluation()
-    except Exception:
-        strategy_evaluation = pd.DataFrame()
+    if strategy_evaluation is None:
+        try:
+            strategy_evaluation = store.load_strategy_version_evaluation(run_id=run_id)
+        except Exception:
+            strategy_evaluation = pd.DataFrame()
 
-    historical_trade_plans = build_historical_trade_plans(
+    historical_trade_plans, diagnostics = build_historical_trade_plans(
         strategy_signals=strategy_signals,
         daily_factors=daily_factors,
         stock_basic=stock_basic,
@@ -43,7 +52,10 @@ def run_trade_plan_backtest(
         top_n=top_n,
         max_plan_items=max_plan_items,
         min_amount_ma5=min_amount_ma5,
+        return_diagnostics=True,
     )
+    if run_id is not None:
+        historical_trade_plans = historical_trade_plans.assign(run_id=run_id)
     store.save_historical_trade_plans(historical_trade_plans)
 
     backtest_results = backtest_trade_plans(
@@ -52,10 +64,52 @@ def run_trade_plan_backtest(
         max_holding_days=max_holding_days,
     )
     performance = evaluate_trade_plan_backtest(backtest_results)
+    if run_id is not None:
+        backtest_results = backtest_results.assign(run_id=run_id)
+        performance = performance.assign(run_id=run_id)
     store.save_trade_plan_backtest_results(backtest_results)
     store.save_trade_plan_backtest_performance(performance)
+    diagnostics["triggered_trades"] = (
+        int(backtest_results["is_triggered"].fillna(False).astype(bool).sum())
+        if "is_triggered" in backtest_results.columns
+        else 0
+    )
+    print(
+        "[historical_trade_plan_chain] "
+        f"historical_signals={diagnostics['historical_signals']} "
+        f"historical_candidates={diagnostics['historical_candidates']} "
+        f"historical_trade_plans={diagnostics['historical_trade_plans']} "
+        f"triggered_trades={diagnostics['triggered_trades']}",
+        flush=True,
+    )
 
+    if return_diagnostics:
+        return historical_trade_plans, backtest_results, performance, diagnostics
     return historical_trade_plans, backtest_results, performance
+
+
+def _normalize_current_strategy_signals(strategy_signals: pd.DataFrame) -> pd.DataFrame:
+    signals = strategy_signals.copy()
+    if "trade_date" in signals.columns:
+        values = signals["trade_date"].fillna("").astype(str).str.strip()
+        digits = values.str.replace(r"\D", "", regex=True)
+        normalized = digits.where(digits.str.len() == 8, "")
+        needs_parse = normalized.eq("") & values.ne("")
+        if needs_parse.any():
+            parsed = pd.to_datetime(values[needs_parse], errors="coerce")
+            normalized.loc[needs_parse] = parsed.dt.strftime("%Y%m%d").fillna("")
+        signals["trade_date"] = normalized
+    if "code" in signals.columns:
+        signals["code"] = signals["code"].fillna("").astype(str).map(_normalize_stock_code)
+    return signals
+
+
+def _normalize_stock_code(value: str) -> str:
+    match = re.search(r"\d{6}", value)
+    if match:
+        return match.group(0)
+    digits = re.sub(r"\D", "", value)
+    return digits.zfill(6)[-6:] if digits else ""
 
 
 def _run_and_report(

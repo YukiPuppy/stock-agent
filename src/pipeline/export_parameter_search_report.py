@@ -7,6 +7,8 @@ from collections.abc import Sequence
 from datetime import date
 from pathlib import Path
 
+import pandas as pd
+
 from src.config.settings import DB_PATH
 from src.database.duckdb_store import StockAgentStore
 from src.reports.parameter_search_report import generate_parameter_search_report
@@ -20,11 +22,16 @@ def export_parameter_search_report(
     db_path: str | None = None,
     output_dir: str = "reports",
     report_date: str | None = None,
+    evaluation: pd.DataFrame | None = None,
+    performance: pd.DataFrame | None = None,
+    run_id: str | None = None,
 ) -> str:
     resolved_db_path = _resolve_db_path(db_path)
     store = StockAgentStore(resolved_db_path)
-    evaluation = store.load_parameter_search_results()
-    performance = store.load_parameter_search_performance()
+    if evaluation is None:
+        evaluation = store.load_parameter_search_results(run_id=run_id)
+    if performance is None:
+        performance = store.load_parameter_search_performance(run_id=run_id)
     resolved_report_date = report_date or date.today().isoformat()
     report = generate_parameter_search_report(
         evaluation=evaluation,

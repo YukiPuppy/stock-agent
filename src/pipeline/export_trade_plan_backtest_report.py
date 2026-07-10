@@ -4,6 +4,8 @@ import argparse
 from collections.abc import Sequence
 from pathlib import Path
 
+import pandas as pd
+
 from src.config.settings import DB_PATH
 from src.database.duckdb_store import StockAgentStore
 from src.reports.trade_plan_backtest_report import generate_trade_plan_backtest_report
@@ -17,11 +19,16 @@ def export_trade_plan_backtest_report(
     db_path: str | None = None,
     output_dir: str = "reports",
     report_date: str | None = None,
+    backtest_results: pd.DataFrame | None = None,
+    performance: pd.DataFrame | None = None,
+    run_id: str | None = None,
 ) -> str:
     resolved_db_path = _resolve_db_path(db_path)
     store = StockAgentStore(resolved_db_path)
-    backtest_results = store.load_trade_plan_backtest_results()
-    performance = store.load_trade_plan_backtest_performance()
+    if backtest_results is None:
+        backtest_results = store.load_trade_plan_backtest_results(run_id=run_id)
+    if performance is None:
+        performance = store.load_trade_plan_backtest_performance(run_id=run_id)
     resolved_report_date = report_date or _resolve_report_date(backtest_results)
     report = generate_trade_plan_backtest_report(backtest_results, performance, report_date=resolved_report_date)
     output_path = Path(output_dir) / f"trade_plan_backtest_{_format_date_for_filename(resolved_report_date)}.md"

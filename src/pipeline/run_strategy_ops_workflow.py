@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import time
 import traceback
+import uuid
 from collections.abc import Callable, Sequence
 from datetime import date, datetime
 from pathlib import Path
@@ -54,6 +55,7 @@ def run_strategy_ops_workflow(
     or write formal strategy configuration files.
     """
     resolved_db_path = db_path if db_path is not None else settings.DB_PATH
+    run_id = _new_run_id()
     smoke_mode = mode == "smoke"
     effective_build_factors = build_factors and not smoke_mode
     effective_backtest_analysis_agent = run_backtest_analysis_agent and not (skip_llm_agents or smoke_mode)
@@ -63,6 +65,7 @@ def run_strategy_ops_workflow(
     report_date = date.today().isoformat()
     summary: dict[str, Any] = {
         "db_path": resolved_db_path,
+        "run_id": run_id,
         "output_dir": output_dir,
         "train_start_date": train_start_date,
         "train_end_date": train_end_date,
@@ -121,6 +124,7 @@ def run_strategy_ops_workflow(
                 export_candidate_config=False,
                 limit_strategies=limit_strategies,
                 limit_param_combinations=limit_param_combinations,
+                run_id=run_id,
             ),
             path_mappings={
                 "strategy_evaluation_report_path": "strategy_evaluation_report_path",
@@ -280,8 +284,14 @@ def _result_rows(result: Any) -> int:
     return 0
 
 
+def _new_run_id() -> str:
+    timestamp = datetime.now().strftime("%Y%m%dT%H%M%S")
+    return f"strategy-ops-{timestamp}-{uuid.uuid4().hex[:8]}"
+
+
 def export_strategy_ops_report(summary: dict, output_dir: str = "reports") -> str:
-    output_path = Path(output_dir) / f"strategy_ops_workflow_{date.today().isoformat()}.md"
+    run_id = summary.get("run_id") or datetime.now().strftime("%Y%m%dT%H%M%S")
+    output_path = Path(output_dir) / f"strategy_ops_workflow_{run_id}.md"
     output_path.parent.mkdir(parents=True, exist_ok=True)
     report_summary = dict(summary)
     report_summary["strategy_ops_report_path"] = str(output_path)
@@ -309,6 +319,7 @@ def _build_strategy_ops_markdown(summary: dict) -> str:
         f"- limit_param_combinations: {summary.get('limit_param_combinations')}",
         f"- skip_llm_agents: {summary.get('skip_llm_agents')}",
         f"- db_path: {summary.get('db_path')}",
+        f"- run_id: {summary.get('run_id')}",
         f"- success_count: {summary.get('success_count')}",
         f"- failed_count: {summary.get('failed_count')}",
         f"- skipped_count: {summary.get('skipped_count')}",

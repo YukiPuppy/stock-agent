@@ -7,6 +7,8 @@ from collections.abc import Sequence
 from datetime import date
 from pathlib import Path
 
+import pandas as pd
+
 from src.config.settings import DB_PATH
 from src.database.duckdb_store import StockAgentStore
 from src.reports.strategy_admission_report import generate_strategy_admission_report
@@ -20,10 +22,13 @@ def export_strategy_admission_report(
     db_path: str | None = None,
     output_dir: str = "reports",
     report_date: str | None = None,
+    admission: pd.DataFrame | None = None,
+    run_id: str | None = None,
 ) -> str:
     resolved_report_date = report_date or date.today().isoformat()
     store = StockAgentStore(_resolve_db_path(db_path))
-    admission = store.load_strategy_admission()
+    if admission is None:
+        admission = store.load_strategy_admission(run_id=run_id)
     report = generate_strategy_admission_report(admission, report_date=resolved_report_date)
 
     output_path = Path(output_dir) / f"strategy_admission_{resolved_report_date}.md"

@@ -1353,46 +1353,32 @@ class StockAgentStore:
     def save_strategy_version_performance(self, df: pd.DataFrame) -> None:
         self._save_performance_table(df, "strategy_version_performance")
 
-    def load_strategy_version_performance(self) -> pd.DataFrame:
-        self._ensure_parent_dir()
-        with self._connect() as con:
-            self._create_tables(con)
-            return con.execute(
-                """
-                SELECT
-                    strategy_name, strategy_version, sample_count, valid_count,
-                    win_rate_1d, win_rate_3d, win_rate_5d,
-                    avg_return_1d, avg_return_3d, avg_return_5d,
-                    median_return_1d, median_return_3d, median_return_5d,
-                    avg_max_drawdown_1d, avg_max_drawdown_3d, avg_max_drawdown_5d
-                FROM strategy_version_performance
-                ORDER BY strategy_name, strategy_version
-                """
-            ).fetchdf()
+    def load_strategy_version_performance(self, run_id: str | None = None) -> pd.DataFrame:
+        return self._load_performance_table("strategy_version_performance", run_id=run_id)
 
     def save_parameter_search_performance(self, df: pd.DataFrame) -> None:
         self._save_performance_table(df, "parameter_search_performance")
 
-    def load_parameter_search_performance(self) -> pd.DataFrame:
-        return self._load_performance_table("parameter_search_performance")
+    def load_parameter_search_performance(self, run_id: str | None = None) -> pd.DataFrame:
+        return self._load_performance_table("parameter_search_performance", run_id=run_id)
 
     def save_strategy_version_evaluation(self, df: pd.DataFrame) -> None:
         self._save_evaluation_table(df, "strategy_version_evaluation")
 
-    def load_strategy_version_evaluation(self) -> pd.DataFrame:
-        return self._load_evaluation_table("strategy_version_evaluation")
+    def load_strategy_version_evaluation(self, run_id: str | None = None) -> pd.DataFrame:
+        return self._load_evaluation_table("strategy_version_evaluation", run_id=run_id)
 
     def save_parameter_search_results(self, df: pd.DataFrame) -> None:
         self._save_evaluation_table(df, "parameter_search_results")
 
-    def load_parameter_search_results(self) -> pd.DataFrame:
-        return self._load_evaluation_table("parameter_search_results")
+    def load_parameter_search_results(self, run_id: str | None = None) -> pd.DataFrame:
+        return self._load_evaluation_table("parameter_search_results", run_id=run_id)
 
     def save_parameter_search_backtest_results(self, df: pd.DataFrame) -> None:
         self._save_backtest_table(df, "parameter_search_backtest_results")
 
-    def load_parameter_search_backtest_results(self) -> pd.DataFrame:
-        return self._load_backtest_table("parameter_search_backtest_results")
+    def load_parameter_search_backtest_results(self, run_id: str | None = None) -> pd.DataFrame:
+        return self._load_backtest_table("parameter_search_backtest_results", run_id=run_id)
 
     def save_walk_forward_validation(self, df: pd.DataFrame) -> None:
         self._ensure_parent_dir()
@@ -1415,6 +1401,8 @@ class StockAgentStore:
             "validation_status",
             "validation_reason",
         ]
+        if "run_id" in df.columns:
+            columns.append("run_id")
         normalized = self._normalize_dataframe(df, columns)
         normalized["strategy_version"] = normalized["strategy_version"].fillna("v1")
         normalized = normalized.drop_duplicates(subset=["strategy_name", "strategy_version"], keep="last")
@@ -1434,21 +1422,11 @@ class StockAgentStore:
                 )
                 con.execute(
                     """
-                    INSERT INTO walk_forward_validation (
-                        strategy_name, strategy_version,
-                        train_valid_count, train_win_rate_3d, train_avg_return_3d, train_avg_drawdown_3d,
-                        validation_valid_count, validation_win_rate_3d, validation_avg_return_3d,
-                        validation_avg_drawdown_3d, return_decay, win_rate_decay, drawdown_worsening,
-                        stability_score, overfit_risk, validation_status, validation_reason
-                    )
-                    SELECT
-                        strategy_name, strategy_version,
-                        train_valid_count, train_win_rate_3d, train_avg_return_3d, train_avg_drawdown_3d,
-                        validation_valid_count, validation_win_rate_3d, validation_avg_return_3d,
-                        validation_avg_drawdown_3d, return_decay, win_rate_decay, drawdown_worsening,
-                        stability_score, overfit_risk, validation_status, validation_reason
+                    INSERT INTO walk_forward_validation ({columns})
+                    SELECT {columns}
                     FROM incoming_walk_forward_validation
                     """
+                    .format(columns=", ".join(columns))
                 )
                 con.execute("COMMIT")
             except Exception:
@@ -1457,26 +1435,49 @@ class StockAgentStore:
             finally:
                 con.unregister("incoming_walk_forward_validation")
 
-    def load_walk_forward_validation(self) -> pd.DataFrame:
+    def load_walk_forward_validation(self, run_id: str | None = None) -> pd.DataFrame:
         self._ensure_parent_dir()
         with self._connect() as con:
             self._create_tables(con)
+            columns = [
+                "strategy_name",
+                "strategy_version",
+                "train_valid_count",
+                "train_win_rate_3d",
+                "train_avg_return_3d",
+                "train_avg_drawdown_3d",
+                "validation_valid_count",
+                "validation_win_rate_3d",
+                "validation_avg_return_3d",
+                "validation_avg_drawdown_3d",
+                "return_decay",
+                "win_rate_decay",
+                "drawdown_worsening",
+                "stability_score",
+                "overfit_risk",
+                "validation_status",
+                "validation_reason",
+            ]
+            params = []
+            where_clause = ""
+            if run_id is not None:
+                columns.append("run_id")
+                where_clause = "WHERE run_id = ?"
+                params.append(run_id)
             return con.execute(
-                """
-                SELECT
-                    strategy_name, strategy_version,
-                    train_valid_count, train_win_rate_3d, train_avg_return_3d, train_avg_drawdown_3d,
-                    validation_valid_count, validation_win_rate_3d, validation_avg_return_3d,
-                    validation_avg_drawdown_3d, return_decay, win_rate_decay, drawdown_worsening,
-                    stability_score, overfit_risk, validation_status, validation_reason
+                f"""
+                SELECT {", ".join(columns)}
                 FROM walk_forward_validation
+                {where_clause}
                 ORDER BY stability_score DESC, strategy_name, strategy_version
-                """
+                """,
+                params,
             ).fetchdf()
 
     def save_strategy_admission(self, df: pd.DataFrame) -> None:
         self._ensure_parent_dir()
-        normalized = self._normalize_dataframe(df, STRATEGY_ADMISSION_COLUMNS)
+        columns = STRATEGY_ADMISSION_COLUMNS + (["run_id"] if "run_id" in df.columns else [])
+        normalized = self._normalize_dataframe(df, columns)
         normalized["strategy_version"] = normalized["strategy_version"].fillna("v1")
         normalized = normalized.drop_duplicates(subset=["strategy_name", "strategy_version"], keep="last")
 
@@ -1495,8 +1496,8 @@ class StockAgentStore:
                 )
                 con.execute(
                     f"""
-                    INSERT INTO strategy_admission ({", ".join(STRATEGY_ADMISSION_COLUMNS)})
-                    SELECT {", ".join(STRATEGY_ADMISSION_COLUMNS)}
+                    INSERT INTO strategy_admission ({", ".join(columns)})
+                    SELECT {", ".join(columns)}
                     FROM incoming_strategy_admission
                     """
                 )
@@ -1507,38 +1508,47 @@ class StockAgentStore:
             finally:
                 con.unregister("incoming_strategy_admission")
 
-    def load_strategy_admission(self) -> pd.DataFrame:
+    def load_strategy_admission(self, run_id: str | None = None) -> pd.DataFrame:
         self._ensure_parent_dir()
         with self._connect() as con:
             self._create_tables(con)
+            columns = list(STRATEGY_ADMISSION_COLUMNS)
+            params = []
+            where_clause = ""
+            if run_id is not None:
+                columns.append("run_id")
+                where_clause = "WHERE run_id = ?"
+                params.append(run_id)
             return con.execute(
                 f"""
-                SELECT {", ".join(STRATEGY_ADMISSION_COLUMNS)}
+                SELECT {", ".join(columns)}
                 FROM strategy_admission
+                {where_clause}
                 ORDER BY admission_score DESC, strategy_name, strategy_version
-                """
+                """,
+                params,
             ).fetchdf()
 
     def _save_evaluation_table(self, df: pd.DataFrame, table_name: str) -> None:
         self._ensure_parent_dir()
-        normalized = self._normalize_dataframe(
-            df,
-            [
-                "strategy_name",
-                "strategy_version",
-                "sample_count",
-                "valid_count",
-                "win_rate_3d",
-                "avg_return_3d",
-                "median_return_3d",
-                "avg_max_drawdown_3d",
-                "evaluation_score",
-                "evaluation_status",
-                "risk_level",
-                "recommendation",
-                "evaluation_reason",
-            ],
-        )
+        columns = [
+            "strategy_name",
+            "strategy_version",
+            "sample_count",
+            "valid_count",
+            "win_rate_3d",
+            "avg_return_3d",
+            "median_return_3d",
+            "avg_max_drawdown_3d",
+            "evaluation_score",
+            "evaluation_status",
+            "risk_level",
+            "recommendation",
+            "evaluation_reason",
+        ]
+        if "run_id" in df.columns:
+            columns.append("run_id")
+        normalized = self._normalize_dataframe(df, columns)
         normalized["strategy_version"] = normalized["strategy_version"].fillna("v1")
         normalized = normalized.drop_duplicates(subset=["strategy_name", "strategy_version"], keep="last")
 
@@ -1558,17 +1568,8 @@ class StockAgentStore:
                 )
                 con.execute(
                     f"""
-                    INSERT INTO {table_name} (
-                        strategy_name, strategy_version, sample_count, valid_count,
-                        win_rate_3d, avg_return_3d, median_return_3d, avg_max_drawdown_3d,
-                        evaluation_score, evaluation_status, risk_level, recommendation,
-                        evaluation_reason
-                    )
-                    SELECT
-                        strategy_name, strategy_version, sample_count, valid_count,
-                        win_rate_3d, avg_return_3d, median_return_3d, avg_max_drawdown_3d,
-                        evaluation_score, evaluation_status, risk_level, recommendation,
-                        evaluation_reason
+                    INSERT INTO {table_name} ({", ".join(columns)})
+                    SELECT {", ".join(columns)}
                     FROM {incoming_name}
                     """
                 )
@@ -1579,50 +1580,69 @@ class StockAgentStore:
             finally:
                 con.unregister(incoming_name)
 
-    def _load_evaluation_table(self, table_name: str) -> pd.DataFrame:
+    def _load_evaluation_table(self, table_name: str, run_id: str | None = None) -> pd.DataFrame:
         self._ensure_parent_dir()
         with self._connect() as con:
             self._create_tables(con)
+            columns = [
+                "strategy_name",
+                "strategy_version",
+                "sample_count",
+                "valid_count",
+                "win_rate_3d",
+                "avg_return_3d",
+                "median_return_3d",
+                "avg_max_drawdown_3d",
+                "evaluation_score",
+                "evaluation_status",
+                "risk_level",
+                "recommendation",
+                "evaluation_reason",
+            ]
+            params = []
+            where_clause = ""
+            if run_id is not None:
+                columns.append("run_id")
+                where_clause = "WHERE run_id = ?"
+                params.append(run_id)
             return con.execute(
                 f"""
-                SELECT
-                    strategy_name, strategy_version, sample_count, valid_count,
-                    win_rate_3d, avg_return_3d, median_return_3d, avg_max_drawdown_3d,
-                    evaluation_score, evaluation_status, risk_level, recommendation,
-                    evaluation_reason
+                SELECT {", ".join(columns)}
                 FROM {table_name}
+                {where_clause}
                 ORDER BY evaluation_score DESC, strategy_name, strategy_version
-                """
+                """,
+                params,
             ).fetchdf()
 
     def _save_backtest_table(self, df: pd.DataFrame, table_name: str) -> None:
         self._ensure_parent_dir()
-        normalized = self._normalize_dataframe(
-            df,
-            [
-                "signal_date",
-                "code",
-                "strategy_name",
-                "strategy_version",
-                "signal_strength",
-                "entry_date",
-                "entry_open",
-                "exit_date_1d",
-                "exit_close_1d",
-                "return_1d",
-                "exit_date_3d",
-                "exit_close_3d",
-                "return_3d",
-                "exit_date_5d",
-                "exit_close_5d",
-                "return_5d",
-                "max_drawdown_1d",
-                "max_drawdown_3d",
-                "max_drawdown_5d",
-                "is_valid",
-                "invalid_reason",
-            ],
-        )
+        columns = [
+            "signal_date",
+            "code",
+            "strategy_name",
+            "strategy_version",
+            "signal_strength",
+            "entry_date",
+            "entry_open",
+            "exit_date_1d",
+            "exit_close_1d",
+            "return_1d",
+            "exit_date_3d",
+            "exit_close_3d",
+            "return_3d",
+            "exit_date_5d",
+            "exit_close_5d",
+            "return_5d",
+            "max_drawdown_1d",
+            "max_drawdown_3d",
+            "max_drawdown_5d",
+            "is_valid",
+            "invalid_reason",
+        ]
+        if "run_id" in df.columns:
+            columns.append("run_id")
+        normalized = self._normalize_dataframe(df, columns)
         normalized["strategy_version"] = normalized["strategy_version"].fillna("v1")
         normalized = normalized.drop_duplicates(
             subset=["signal_date", "code", "strategy_name", "strategy_version"],
@@ -1647,23 +1667,8 @@ class StockAgentStore:
                 )
                 con.execute(
                     f"""
-                    INSERT INTO {table_name} (
-                        signal_date, code, strategy_name, strategy_version, signal_strength,
-                        entry_date, entry_open,
-                        exit_date_1d, exit_close_1d, return_1d,
-                        exit_date_3d, exit_close_3d, return_3d,
-                        exit_date_5d, exit_close_5d, return_5d,
-                        max_drawdown_1d, max_drawdown_3d, max_drawdown_5d,
-                        is_valid, invalid_reason
-                    )
-                    SELECT
-                        signal_date, code, strategy_name, strategy_version, signal_strength,
-                        entry_date, entry_open,
-                        exit_date_1d, exit_close_1d, return_1d,
-                        exit_date_3d, exit_close_3d, return_3d,
-                        exit_date_5d, exit_close_5d, return_5d,
-                        max_drawdown_1d, max_drawdown_3d, max_drawdown_5d,
-                        is_valid, invalid_reason
+                    INSERT INTO {table_name} ({", ".join(columns)})
+                    SELECT {", ".join(columns)}
                     FROM {incoming_name}
                     """
                 )
@@ -1674,48 +1679,72 @@ class StockAgentStore:
             finally:
                 con.unregister(incoming_name)
 
-    def _load_backtest_table(self, table_name: str) -> pd.DataFrame:
+    def _load_backtest_table(self, table_name: str, run_id: str | None = None) -> pd.DataFrame:
         self._ensure_parent_dir()
         with self._connect() as con:
             self._create_tables(con)
+            columns = [
+                "signal_date",
+                "code",
+                "strategy_name",
+                "strategy_version",
+                "signal_strength",
+                "entry_date",
+                "entry_open",
+                "exit_date_1d",
+                "exit_close_1d",
+                "return_1d",
+                "exit_date_3d",
+                "exit_close_3d",
+                "return_3d",
+                "exit_date_5d",
+                "exit_close_5d",
+                "return_5d",
+                "max_drawdown_1d",
+                "max_drawdown_3d",
+                "max_drawdown_5d",
+                "is_valid",
+                "invalid_reason",
+            ]
+            params = []
+            where_clause = ""
+            if run_id is not None:
+                columns.append("run_id")
+                where_clause = "WHERE run_id = ?"
+                params.append(run_id)
             return con.execute(
                 f"""
-                SELECT
-                    signal_date, code, strategy_name, strategy_version, signal_strength,
-                    entry_date, entry_open,
-                    exit_date_1d, exit_close_1d, return_1d,
-                    exit_date_3d, exit_close_3d, return_3d,
-                    exit_date_5d, exit_close_5d, return_5d,
-                    max_drawdown_1d, max_drawdown_3d, max_drawdown_5d,
-                    is_valid, invalid_reason
+                SELECT {", ".join(columns)}
                 FROM {table_name}
+                {where_clause}
                 ORDER BY signal_date, code, strategy_name, strategy_version
-                """
+                """,
+                params,
             ).fetchdf()
 
     def _save_performance_table(self, df: pd.DataFrame, table_name: str) -> None:
         self._ensure_parent_dir()
-        normalized = self._normalize_dataframe(
-            df,
-            [
-                "strategy_name",
-                "strategy_version",
-                "sample_count",
-                "valid_count",
-                "win_rate_1d",
-                "win_rate_3d",
-                "win_rate_5d",
-                "avg_return_1d",
-                "avg_return_3d",
-                "avg_return_5d",
-                "median_return_1d",
-                "median_return_3d",
-                "median_return_5d",
-                "avg_max_drawdown_1d",
-                "avg_max_drawdown_3d",
-                "avg_max_drawdown_5d",
-            ],
-        )
+        columns = [
+            "strategy_name",
+            "strategy_version",
+            "sample_count",
+            "valid_count",
+            "win_rate_1d",
+            "win_rate_3d",
+            "win_rate_5d",
+            "avg_return_1d",
+            "avg_return_3d",
+            "avg_return_5d",
+            "median_return_1d",
+            "median_return_3d",
+            "median_return_5d",
+            "avg_max_drawdown_1d",
+            "avg_max_drawdown_3d",
+            "avg_max_drawdown_5d",
+        ]
+        if "run_id" in df.columns:
+            columns.append("run_id")
+        normalized = self._normalize_dataframe(df, columns)
         normalized["strategy_version"] = normalized["strategy_version"].fillna("v1")
         normalized = normalized.drop_duplicates(subset=["strategy_name", "strategy_version"], keep="last")
 
@@ -1735,19 +1764,8 @@ class StockAgentStore:
                 )
                 con.execute(
                     f"""
-                    INSERT INTO {table_name} (
-                        strategy_name, strategy_version, sample_count, valid_count,
-                        win_rate_1d, win_rate_3d, win_rate_5d,
-                        avg_return_1d, avg_return_3d, avg_return_5d,
-                        median_return_1d, median_return_3d, median_return_5d,
-                        avg_max_drawdown_1d, avg_max_drawdown_3d, avg_max_drawdown_5d
-                    )
-                    SELECT
-                        strategy_name, strategy_version, sample_count, valid_count,
-                        win_rate_1d, win_rate_3d, win_rate_5d,
-                        avg_return_1d, avg_return_3d, avg_return_5d,
-                        median_return_1d, median_return_3d, median_return_5d,
-                        avg_max_drawdown_1d, avg_max_drawdown_3d, avg_max_drawdown_5d
+                    INSERT INTO {table_name} ({", ".join(columns)})
+                    SELECT {", ".join(columns)}
                     FROM {incoming_name}
                     """
                 )
@@ -1758,21 +1776,42 @@ class StockAgentStore:
             finally:
                 con.unregister(incoming_name)
 
-    def _load_performance_table(self, table_name: str) -> pd.DataFrame:
+    def _load_performance_table(self, table_name: str, run_id: str | None = None) -> pd.DataFrame:
         self._ensure_parent_dir()
         with self._connect() as con:
             self._create_tables(con)
+            columns = [
+                "strategy_name",
+                "strategy_version",
+                "sample_count",
+                "valid_count",
+                "win_rate_1d",
+                "win_rate_3d",
+                "win_rate_5d",
+                "avg_return_1d",
+                "avg_return_3d",
+                "avg_return_5d",
+                "median_return_1d",
+                "median_return_3d",
+                "median_return_5d",
+                "avg_max_drawdown_1d",
+                "avg_max_drawdown_3d",
+                "avg_max_drawdown_5d",
+            ]
+            params = []
+            where_clause = ""
+            if run_id is not None:
+                columns.append("run_id")
+                where_clause = "WHERE run_id = ?"
+                params.append(run_id)
             return con.execute(
                 f"""
-                SELECT
-                    strategy_name, strategy_version, sample_count, valid_count,
-                    win_rate_1d, win_rate_3d, win_rate_5d,
-                    avg_return_1d, avg_return_3d, avg_return_5d,
-                    median_return_1d, median_return_3d, median_return_5d,
-                    avg_max_drawdown_1d, avg_max_drawdown_3d, avg_max_drawdown_5d
+                SELECT {", ".join(columns)}
                 FROM {table_name}
+                {where_clause}
                 ORDER BY strategy_name, strategy_version
-                """
+                """,
+                params,
             ).fetchdf()
 
     def save_trade_plan(self, df: pd.DataFrame) -> None:
@@ -1879,7 +1918,8 @@ class StockAgentStore:
 
     def save_historical_trade_plans(self, df: pd.DataFrame) -> None:
         self._ensure_parent_dir()
-        normalized = self._normalize_dataframe(df, TRADE_PLAN_COLUMNS)
+        columns = TRADE_PLAN_COLUMNS + (["run_id"] if "run_id" in df.columns else [])
+        normalized = self._normalize_dataframe(df, columns)
         for column in ["trade_date", "code", "strategy_names", "strategy_versions"]:
             normalized[column] = normalized[column].fillna("").astype(str)
         normalized = normalized.drop_duplicates(
@@ -1904,8 +1944,8 @@ class StockAgentStore:
                 )
                 con.execute(
                     f"""
-                    INSERT INTO historical_trade_plans ({", ".join(TRADE_PLAN_COLUMNS)})
-                    SELECT {", ".join(TRADE_PLAN_COLUMNS)}
+                    INSERT INTO historical_trade_plans ({", ".join(columns)})
+                    SELECT {", ".join(columns)}
                     FROM incoming_historical_trade_plans
                     """
                 )
@@ -1916,18 +1956,24 @@ class StockAgentStore:
             finally:
                 con.unregister("incoming_historical_trade_plans")
 
-    def load_historical_trade_plans(self, trade_date: str | None = None) -> pd.DataFrame:
+    def load_historical_trade_plans(self, trade_date: str | None = None, run_id: str | None = None) -> pd.DataFrame:
         self._ensure_parent_dir()
         params = []
-        where_clause = ""
+        conditions = []
         if trade_date is not None:
-            where_clause = "WHERE trade_date = ?"
+            conditions.append("trade_date = ?")
             params.append(trade_date)
+        columns = list(TRADE_PLAN_COLUMNS)
+        if run_id is not None:
+            columns.append("run_id")
+            conditions.append("run_id = ?")
+            params.append(run_id)
+        where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
         with self._connect() as con:
             self._create_tables(con)
             return con.execute(
                 f"""
-                SELECT {", ".join(TRADE_PLAN_COLUMNS)}
+                SELECT {", ".join(columns)}
                 FROM historical_trade_plans
                 {where_clause}
                 ORDER BY trade_date, rank, code, strategy_names, strategy_versions
@@ -1937,7 +1983,8 @@ class StockAgentStore:
 
     def save_trade_plan_backtest_results(self, df: pd.DataFrame) -> None:
         self._ensure_parent_dir()
-        normalized = self._normalize_dataframe(df, BACKTEST_RESULT_COLUMNS)
+        columns = BACKTEST_RESULT_COLUMNS + (["run_id"] if "run_id" in df.columns else [])
+        normalized = self._normalize_dataframe(df, columns)
         for column in ["plan_date", "code", "strategy_names", "strategy_versions"]:
             normalized[column] = normalized[column].fillna("").astype(str)
         normalized = normalized.drop_duplicates(
@@ -1962,8 +2009,8 @@ class StockAgentStore:
                 )
                 con.execute(
                     f"""
-                    INSERT INTO trade_plan_backtest_results ({", ".join(BACKTEST_RESULT_COLUMNS)})
-                    SELECT {", ".join(BACKTEST_RESULT_COLUMNS)}
+                    INSERT INTO trade_plan_backtest_results ({", ".join(columns)})
+                    SELECT {", ".join(columns)}
                     FROM incoming_trade_plan_backtest_results
                     """
                 )
@@ -1974,21 +2021,31 @@ class StockAgentStore:
             finally:
                 con.unregister("incoming_trade_plan_backtest_results")
 
-    def load_trade_plan_backtest_results(self) -> pd.DataFrame:
+    def load_trade_plan_backtest_results(self, run_id: str | None = None) -> pd.DataFrame:
         self._ensure_parent_dir()
         with self._connect() as con:
             self._create_tables(con)
+            columns = list(BACKTEST_RESULT_COLUMNS)
+            params = []
+            where_clause = ""
+            if run_id is not None:
+                columns.append("run_id")
+                where_clause = "WHERE run_id = ?"
+                params.append(run_id)
             return con.execute(
                 f"""
-                SELECT {", ".join(BACKTEST_RESULT_COLUMNS)}
+                SELECT {", ".join(columns)}
                 FROM trade_plan_backtest_results
+                {where_clause}
                 ORDER BY plan_date, code, strategy_names, strategy_versions
-                """
+                """,
+                params,
             ).fetchdf()
 
     def save_trade_plan_backtest_performance(self, df: pd.DataFrame) -> None:
         self._ensure_parent_dir()
-        normalized = self._normalize_dataframe(df, TRADE_PLAN_BACKTEST_PERFORMANCE_COLUMNS)
+        columns = TRADE_PLAN_BACKTEST_PERFORMANCE_COLUMNS + (["run_id"] if "run_id" in df.columns else [])
+        normalized = self._normalize_dataframe(df, columns)
         for column in ["strategy_names", "strategy_versions", "action"]:
             normalized[column] = normalized[column].fillna("").astype(str)
         normalized = normalized.drop_duplicates(
@@ -2012,8 +2069,8 @@ class StockAgentStore:
                 )
                 con.execute(
                     f"""
-                    INSERT INTO trade_plan_backtest_performance ({", ".join(TRADE_PLAN_BACKTEST_PERFORMANCE_COLUMNS)})
-                    SELECT {", ".join(TRADE_PLAN_BACKTEST_PERFORMANCE_COLUMNS)}
+                    INSERT INTO trade_plan_backtest_performance ({", ".join(columns)})
+                    SELECT {", ".join(columns)}
                     FROM incoming_trade_plan_backtest_performance
                     """
                 )
@@ -2024,16 +2081,25 @@ class StockAgentStore:
             finally:
                 con.unregister("incoming_trade_plan_backtest_performance")
 
-    def load_trade_plan_backtest_performance(self) -> pd.DataFrame:
+    def load_trade_plan_backtest_performance(self, run_id: str | None = None) -> pd.DataFrame:
         self._ensure_parent_dir()
         with self._connect() as con:
             self._create_tables(con)
+            columns = list(TRADE_PLAN_BACKTEST_PERFORMANCE_COLUMNS)
+            params = []
+            where_clause = ""
+            if run_id is not None:
+                columns.append("run_id")
+                where_clause = "WHERE run_id = ?"
+                params.append(run_id)
             return con.execute(
                 f"""
-                SELECT {", ".join(TRADE_PLAN_BACKTEST_PERFORMANCE_COLUMNS)}
+                SELECT {", ".join(columns)}
                 FROM trade_plan_backtest_performance
+                {where_clause}
                 ORDER BY strategy_names, strategy_versions, action
-                """
+                """,
+                params,
             ).fetchdf()
 
     def save_actual_trades(self, df: pd.DataFrame) -> None:
@@ -3405,6 +3471,19 @@ class StockAgentStore:
             )
             """
         )
+        for table_name in [
+            "strategy_version_evaluation",
+            "parameter_search_results",
+            "walk_forward_validation",
+            "historical_trade_plans",
+            "trade_plan_backtest_results",
+            "trade_plan_backtest_performance",
+            "strategy_admission",
+            "parameter_search_performance",
+            "parameter_search_backtest_results",
+            "strategy_version_performance",
+        ]:
+            StockAgentStore._ensure_columns(con, table_name, {"run_id": "VARCHAR"})
         con.execute(
             """
             CREATE TABLE IF NOT EXISTS actual_trades (

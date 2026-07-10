@@ -154,7 +154,7 @@ def test_generates_strategy_ops_markdown_report(tmp_path, monkeypatch):
     summary = workflow.run_strategy_ops_workflow(db_path="test.duckdb", output_dir=str(tmp_path))
 
     report_path = Path(summary["strategy_ops_report_path"])
-    assert report_path.name == f"strategy_ops_workflow_{date.today().isoformat()}.md"
+    assert report_path.name == f"strategy_ops_workflow_{summary['run_id']}.md"
     assert report_path.is_file()
     content = report_path.read_text(encoding="utf-8")
     assert "# 策略研究总流程运行报告" in content
@@ -163,6 +163,21 @@ def test_generates_strategy_ops_markdown_report(tmp_path, monkeypatch):
     assert "run_factor_build_workflow" in content
     assert "strategy_research_suggestions JSON 路径" in content
     assert "parameter_search_space_candidate JSON 路径" in content
+    assert f"run_id: {summary['run_id']}" in content
+
+
+def test_same_day_runs_do_not_overwrite_strategy_ops_report(tmp_path, monkeypatch):
+    calls = []
+    _patch_successful_steps(monkeypatch, calls)
+
+    first = workflow.run_strategy_ops_workflow(db_path="test.duckdb", output_dir=str(tmp_path))
+    second = workflow.run_strategy_ops_workflow(db_path="test.duckdb", output_dir=str(tmp_path))
+
+    first_path = Path(first["strategy_ops_report_path"])
+    second_path = Path(second["strategy_ops_report_path"])
+    assert first_path != second_path
+    assert first_path.is_file()
+    assert second_path.is_file()
 
 
 def test_outputs_step_level_logs(tmp_path, monkeypatch, capsys):

@@ -28,6 +28,7 @@ def run_oos_validation(
     min_valid_count_validation: int = 10,
     limit_strategies: int | None = None,
     limit_param_combinations: int | None = None,
+    run_id: str | None = None,
 ) -> pd.DataFrame:
     resolved_db_path = _resolve_db_path(db_path)
     store = StockAgentStore(resolved_db_path)
@@ -51,6 +52,8 @@ def run_oos_validation(
         min_valid_count_train=min_valid_count_train,
         min_valid_count_validation=min_valid_count_validation,
     )
+    if run_id is not None:
+        validation = validation.assign(run_id=run_id)
     store.save_walk_forward_validation(validation)
     return validation
 

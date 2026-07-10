@@ -22,21 +22,32 @@ def run_strategy_admission(
     db_path: str | None = None,
     export_candidate_config: bool = False,
     candidate_config_path: str = "configs/active_strategies_candidate.json",
+    strategy_evaluation: pd.DataFrame | None = None,
+    parameter_search_results: pd.DataFrame | None = None,
+    walk_forward_validation: pd.DataFrame | None = None,
+    trade_plan_backtest_performance: pd.DataFrame | None = None,
+    run_id: str | None = None,
 ) -> pd.DataFrame:
     resolved_db_path = _resolve_db_path(db_path)
     store = StockAgentStore(resolved_db_path)
 
-    strategy_evaluation = store.load_strategy_version_evaluation()
-    parameter_results = store.load_parameter_search_results()
-    walk_forward = store.load_walk_forward_validation()
-    trade_plan_performance = store.load_trade_plan_backtest_performance()
+    if strategy_evaluation is None:
+        strategy_evaluation = store.load_strategy_version_evaluation(run_id=run_id)
+    if parameter_search_results is None:
+        parameter_search_results = store.load_parameter_search_results(run_id=run_id)
+    if walk_forward_validation is None:
+        walk_forward_validation = store.load_walk_forward_validation(run_id=run_id)
+    if trade_plan_backtest_performance is None:
+        trade_plan_backtest_performance = store.load_trade_plan_backtest_performance(run_id=run_id)
 
     admission = build_strategy_admission(
         strategy_evaluation=strategy_evaluation,
-        parameter_search_results=parameter_results,
-        walk_forward_validation=walk_forward,
-        trade_plan_backtest_performance=trade_plan_performance,
+        parameter_search_results=parameter_search_results,
+        walk_forward_validation=walk_forward_validation,
+        trade_plan_backtest_performance=trade_plan_backtest_performance,
     )
+    if run_id is not None:
+        admission = admission.assign(run_id=run_id)
     store.save_strategy_admission(admission)
 
     if export_candidate_config:

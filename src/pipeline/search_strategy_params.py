@@ -30,6 +30,7 @@ def run_parameter_search(
     max_avg_drawdown_3d: float = -0.08,
     limit_strategies: int | None = None,
     limit_param_combinations: int | None = None,
+    run_id: str | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     resolved_db_path = _resolve_db_path(db_path)
     store = StockAgentStore(resolved_db_path)
@@ -57,6 +58,11 @@ def run_parameter_search(
         min_avg_return_3d=min_avg_return_3d,
         max_avg_drawdown_3d=max_avg_drawdown_3d,
     )
+
+    if run_id is not None:
+        backtest_results = backtest_results.assign(run_id=run_id)
+        performance = performance.assign(run_id=run_id)
+        evaluation = evaluation.assign(run_id=run_id)
 
     store.save_parameter_search_backtest_results(backtest_results)
     store.save_parameter_search_performance(performance)

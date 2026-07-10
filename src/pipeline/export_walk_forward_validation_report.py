@@ -7,6 +7,8 @@ from collections.abc import Sequence
 from datetime import date
 from pathlib import Path
 
+import pandas as pd
+
 from src.config.settings import DB_PATH
 from src.database.duckdb_store import StockAgentStore
 from src.reports.walk_forward_validation_report import generate_walk_forward_validation_report
@@ -24,10 +26,13 @@ def export_walk_forward_validation_report(
     train_end_date: str | None = None,
     validation_start_date: str | None = None,
     validation_end_date: str | None = None,
+    validation: pd.DataFrame | None = None,
+    run_id: str | None = None,
 ) -> str:
     resolved_report_date = report_date or date.today().isoformat()
     store = StockAgentStore(_resolve_db_path(db_path))
-    validation = store.load_walk_forward_validation()
+    if validation is None:
+        validation = store.load_walk_forward_validation(run_id=run_id)
     report = generate_walk_forward_validation_report(
         validation=validation,
         train_start_date=train_start_date,

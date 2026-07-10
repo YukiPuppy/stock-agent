@@ -4,12 +4,16 @@ from __future__ import annotations
 
 import argparse
 import time
+import uuid
 from collections.abc import Sequence
+from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 import pandas as pd
 
 from src.config import settings
+from src.database.duckdb_store import StockAgentStore
 from src.pipeline.backtest_strategy_versions import run_strategy_version_backtest
 from src.pipeline.backtest_trade_plans import run_trade_plan_backtest
 from src.pipeline.build_strategy_admission import run_strategy_admission
@@ -49,6 +53,99 @@ def _has_oos_dates(
     )
 
 
+def _new_run_id() -> str:
+    timestamp = datetime.now().strftime("%Y%m%dT%H%M%S")
+    return f"strategy-research-{timestamp}-{uuid.uuid4().hex[:8]}"
+
+
+def _unpack_version_backtest_output(
+    output: tuple[pd.DataFrame, ...],
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    if len(output) >= 3:
+        return output[0], output[1], output[2]
+    backtest_results, performance = output
+    return backtest_results, performance, _signals_from_backtest_results(backtest_results)
+
+
+def _signals_from_backtest_results(backtest_results: pd.DataFrame) -> pd.DataFrame:
+    required = ["signal_date", "code", "strategy_name", "strategy_version", "signal_strength"]
+    if backtest_results.empty or any(column not in backtest_results.columns for column in required):
+        return pd.DataFrame(
+            columns=[
+                "trade_date",
+                "code",
+                "strategy_name",
+                "strategy_version",
+                "signal_strength",
+                "entry_reason",
+                "risk_flags",
+            ]
+        )
+    signals = backtest_results.loc[:, required].rename(columns={"signal_date": "trade_date"}).copy()
+    signals["entry_reason"] = ""
+    signals["risk_flags"] = ""
+    return signals
+
+
+def _append_chain_profile_steps(profile_steps: list[dict[str, Any]], diagnostics: dict[str, int]) -> None:
+    for key in ["historical_signals", "historical_candidates", "historical_trade_plans"]:
+        profile_steps.append(
+            {
+                "function_name": key,
+                "status": "success",
+                "elapsed_seconds": 0.0,
+                "rows": int(diagnostics.get(key, 0)),
+            }
+        )
+
+
+def _unpack_trade_plan_backtest_output(
+    output: tuple[pd.DataFrame, ...],
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, dict[str, int]]:
+    if len(output) >= 4:
+        return output[0], output[1], output[2], output[3]
+    historical_trade_plans, backtest_results, performance = output
+    diagnostics = {
+        "historical_signals": 0,
+        "historical_candidates": 0,
+        "historical_trade_plans": int(len(historical_trade_plans)),
+        "triggered_trades": (
+            int(backtest_results["is_triggered"].fillna(False).astype(bool).sum())
+            if "is_triggered" in backtest_results.columns
+            else 0
+        ),
+    }
+    return historical_trade_plans, backtest_results, performance, diagnostics
+
+
+def _research_table_counts(db_path: str) -> dict[str, int]:
+    table_names = [
+        "strategy_version_evaluation",
+        "parameter_search_results",
+        "walk_forward_validation",
+        "historical_trade_plans",
+        "trade_plan_backtest_results",
+        "strategy_admission",
+    ]
+    if not Path(db_path).exists():
+        return {table_name: 0 for table_name in table_names}
+    store = StockAgentStore(db_path)
+    counts: dict[str, int] = {}
+    with store._connect() as con:
+        store._create_tables(con)
+        for table_name in table_names:
+            counts[table_name] = int(con.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0])
+    return counts
+
+
+def _log_current_and_total_rows(current_rows: dict[str, int], table_total_rows: dict[str, int]) -> None:
+    for table_name, current_count in current_rows.items():
+        print(
+            f"[current-run] {table_name} rows={current_count} table_total_rows={table_total_rows.get(table_name, 0)}",
+            flush=True,
+        )
+
+
 def run_strategy_research_workflow(
     db_path: str | None = None,
     output_dir: str = "reports",
@@ -65,9 +162,11 @@ def run_strategy_research_workflow(
     candidate_config_path: str = "configs/active_strategies_candidate.json",
     limit_strategies: int | None = None,
     limit_param_combinations: int | None = None,
+    run_id: str | None = None,
 ) -> dict:
     """Run local research steps and return row counts plus exported artifact paths."""
     resolved_db_path = _resolve_db_path(db_path)
+    resolved_run_id = run_id or _new_run_id()
     profile_steps: list[dict[str, Any]] = []
     skipped_oos = not _has_oos_dates(
         train_start_date=train_start_date,
@@ -76,7 +175,7 @@ def run_strategy_research_workflow(
         validation_end_date=validation_end_date,
     )
 
-    version_backtest_results, version_performance = _profiled(
+    version_backtest_output = _profiled(
         profile_steps,
         "run_strategy_version_backtest",
         lambda: run_strategy_version_backtest(
@@ -85,12 +184,21 @@ def run_strategy_research_workflow(
             config_path=strategy_versions_config_path,
             db_path=resolved_db_path,
             limit_strategies=limit_strategies,
+            run_id=resolved_run_id,
+            return_signals=True,
         ),
+    )
+    version_backtest_results, version_performance, historical_signals = _unpack_version_backtest_output(
+        version_backtest_output
     )
     version_evaluation = _profiled(
         profile_steps,
         "run_strategy_version_evaluation",
-        lambda: run_strategy_version_evaluation(db_path=resolved_db_path),
+        lambda: run_strategy_version_evaluation(
+            db_path=resolved_db_path,
+            performance=version_performance,
+            run_id=resolved_run_id,
+        ),
     )
 
     parameter_backtest_results, parameter_performance, parameter_results = _profiled(
@@ -103,6 +211,7 @@ def run_strategy_research_workflow(
             db_path=resolved_db_path,
             limit_strategies=limit_strategies,
             limit_param_combinations=limit_param_combinations,
+            run_id=resolved_run_id,
         ),
     )
 
@@ -120,18 +229,27 @@ def run_strategy_research_workflow(
                 db_path=resolved_db_path,
                 limit_strategies=limit_strategies,
                 limit_param_combinations=limit_param_combinations,
+                run_id=resolved_run_id,
             ),
         )
 
-    _, trade_plan_backtest_results, trade_plan_performance = _profiled(
+    trade_plan_backtest_output = _profiled(
         profile_steps,
         "run_trade_plan_backtest",
         lambda: run_trade_plan_backtest(
             db_path=resolved_db_path,
             start_date=train_start_date,
             end_date=train_end_date,
+            strategy_signals=historical_signals,
+            strategy_evaluation=version_evaluation,
+            run_id=resolved_run_id,
+            return_diagnostics=True,
         ),
     )
+    historical_trade_plans, trade_plan_backtest_results, trade_plan_performance, trade_plan_diagnostics = (
+        _unpack_trade_plan_backtest_output(trade_plan_backtest_output)
+    )
+    _append_chain_profile_steps(profile_steps, trade_plan_diagnostics)
 
     admission = _profiled(
         profile_steps,
@@ -140,6 +258,11 @@ def run_strategy_research_workflow(
             db_path=resolved_db_path,
             export_candidate_config=export_candidate_config,
             candidate_config_path=candidate_config_path,
+            strategy_evaluation=version_evaluation,
+            parameter_search_results=parameter_results,
+            walk_forward_validation=walk_forward_validation,
+            trade_plan_backtest_performance=trade_plan_performance,
+            run_id=resolved_run_id,
         ),
     )
 
@@ -156,6 +279,9 @@ def run_strategy_research_workflow(
             lambda: export_strategy_evaluation_report(
                 db_path=resolved_db_path,
                 output_dir=output_dir,
+                evaluation=version_evaluation,
+                performance=version_performance,
+                run_id=resolved_run_id,
             ),
         )
         parameter_search_report_path = _profiled(
@@ -164,6 +290,9 @@ def run_strategy_research_workflow(
             lambda: export_parameter_search_report(
                 db_path=resolved_db_path,
                 output_dir=output_dir,
+                evaluation=parameter_results,
+                performance=parameter_performance,
+                run_id=resolved_run_id,
             ),
         )
         if not skipped_oos:
@@ -177,6 +306,8 @@ def run_strategy_research_workflow(
                     train_end_date=train_end_date,
                     validation_start_date=validation_start_date,
                     validation_end_date=validation_end_date,
+                    validation=walk_forward_validation,
+                    run_id=resolved_run_id,
                 ),
             )
         trade_plan_backtest_report_path = _profiled(
@@ -185,6 +316,9 @@ def run_strategy_research_workflow(
             lambda: export_trade_plan_backtest_report(
                 db_path=resolved_db_path,
                 output_dir=output_dir,
+                backtest_results=trade_plan_backtest_results,
+                performance=trade_plan_performance,
+                run_id=resolved_run_id,
             ),
         )
         strategy_admission_report_path = _profiled(
@@ -193,12 +327,28 @@ def run_strategy_research_workflow(
             lambda: export_strategy_admission_report(
                 db_path=resolved_db_path,
                 output_dir=output_dir,
+                admission=admission,
+                run_id=resolved_run_id,
             ),
         )
+
+    table_total_rows = _research_table_counts(resolved_db_path)
+    _log_current_and_total_rows(
+        {
+            "strategy_version_evaluation": len(version_evaluation),
+            "parameter_search_results": len(parameter_results),
+            "walk_forward_validation": len(walk_forward_validation),
+            "historical_trade_plans": len(historical_trade_plans),
+            "trade_plan_backtest_results": len(trade_plan_backtest_results),
+            "strategy_admission": len(admission),
+        },
+        table_total_rows,
+    )
 
     return {
         "db_path": resolved_db_path,
         "output_dir": output_dir,
+        "run_id": resolved_run_id,
         "strategy_version_backtest_results_rows": _row_count(version_backtest_results),
         "strategy_version_performance_rows": _row_count(version_performance),
         "strategy_version_evaluation_rows": _row_count(version_evaluation),
@@ -206,6 +356,10 @@ def run_strategy_research_workflow(
         "parameter_search_performance_rows": _row_count(parameter_performance),
         "parameter_search_results_rows": _row_count(parameter_results),
         "walk_forward_validation_rows": _row_count(walk_forward_validation),
+        "historical_signals_rows": _row_count(historical_signals),
+        "historical_candidates_rows": int(trade_plan_diagnostics.get("historical_candidates", 0)),
+        "historical_trade_plans_rows": _row_count(historical_trade_plans),
+        "triggered_trades_rows": int(trade_plan_diagnostics.get("triggered_trades", 0)),
         "trade_plan_backtest_results_rows": _row_count(trade_plan_backtest_results),
         "trade_plan_backtest_performance_rows": _row_count(trade_plan_performance),
         "strategy_admission_rows": _row_count(admission),
@@ -219,6 +373,7 @@ def run_strategy_research_workflow(
         "limit_strategies": limit_strategies,
         "limit_param_combinations": limit_param_combinations,
         "profile_steps": profile_steps,
+        "table_total_counts": table_total_rows,
     }
 
 
@@ -305,9 +460,13 @@ def main(argv: Sequence[str] | None = None) -> None:
 
     print("Strategy research workflow finished.")
     for key in [
+        "run_id",
         "strategy_version_evaluation_rows",
         "parameter_search_results_rows",
         "walk_forward_validation_rows",
+        "historical_signals_rows",
+        "historical_candidates_rows",
+        "historical_trade_plans_rows",
         "trade_plan_backtest_performance_rows",
         "strategy_admission_rows",
         "active_candidate_config_path",
