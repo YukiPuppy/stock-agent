@@ -23,6 +23,13 @@ from src.pipeline.export_strategy_admission_report import export_strategy_admiss
 from src.pipeline.export_strategy_evaluation_report import export_strategy_evaluation_report
 from src.pipeline.export_trade_plan_backtest_report import export_trade_plan_backtest_report
 from src.pipeline.export_walk_forward_validation_report import export_walk_forward_validation_report
+from src.pipeline.parallel_strategy_research import (
+    PARALLELIZED_STEPS,
+    ParallelStageOutput,
+    run_oos_validation_parallel,
+    run_parameter_search_parallel,
+    run_trade_plan_backtest_parallel,
+)
 from src.pipeline.search_strategy_params import run_parameter_search
 from src.pipeline.validate_strategy_oos import run_oos_validation
 from src.research.parameter_search import generate_search_versions, load_parameter_search_space
@@ -145,7 +152,9 @@ def build_dry_run_plan(
     parameter_search_config_path: str | None = None,
     limit_strategies: int | None = None,
     limit_param_combinations: int | None = None,
+    workers: int = 1,
 ) -> dict[str, Any]:
+    resolved_workers = max(1, int(workers or 1))
     versions = iter_strategy_versions(load_strategy_versions(strategy_versions_config_path))
     if limit_strategies is not None:
         versions = versions[: int(limit_strategies)]
@@ -181,6 +190,9 @@ def build_dry_run_plan(
         ),
         "limit_strategies": limit_strategies,
         "limit_param_combinations": limit_param_combinations,
+        "workers": resolved_workers,
+        "parallel_enabled": resolved_workers > 1,
+        "parallelized_steps": PARALLELIZED_STEPS if resolved_workers > 1 else [],
     }
 
 
@@ -209,10 +221,16 @@ def run_strategy_research_workflow(
     limit_strategies: int | None = None,
     limit_param_combinations: int | None = None,
     run_id: str | None = None,
+    workers: int = 1,
 ) -> dict:
     """Run local research steps and return row counts plus exported artifact paths."""
     resolved_db_path = _resolve_db_path(db_path)
     resolved_run_id = run_id or _new_run_id()
+    resolved_workers = max(1, int(workers or 1))
+    parallel_enabled = resolved_workers > 1
+    parallel_stage_summaries: list[dict[str, Any]] = []
+    if parallel_enabled:
+        _log_parallel_thread_hint(resolved_workers)
     profile_steps: list[dict[str, Any]] = []
     skipped_oos = not _has_oos_dates(
         train_start_date=train_start_date,
@@ -247,10 +265,22 @@ def run_strategy_research_workflow(
         ),
     )
 
-    parameter_backtest_results, parameter_performance, parameter_results = _profiled(
+    parameter_versions = (
+        generate_search_versions(
+            load_parameter_search_space(parameter_search_config_path),
+            limit_strategies=limit_strategies,
+            limit_param_combinations=limit_param_combinations,
+        )
+        if parallel_enabled
+        else []
+    )
+    parameter_backtest_results, parameter_performance, parameter_results = _parallel_or_serial_profiled(
         profile_steps,
+        parallel_stage_summaries,
         "run_parameter_search",
-        lambda: run_parameter_search(
+        parallel_enabled=parallel_enabled,
+        requested_workers=resolved_workers,
+        serial_runner=lambda: run_parameter_search(
             start_date=parameter_search_start_date,
             end_date=parameter_search_end_date,
             config_path=parameter_search_config_path,
@@ -259,14 +289,25 @@ def run_strategy_research_workflow(
             limit_param_combinations=limit_param_combinations,
             run_id=resolved_run_id,
         ),
+        parallel_runner=lambda: run_parameter_search_parallel(
+            db_path=resolved_db_path,
+            versions=parameter_versions,
+            start_date=parameter_search_start_date,
+            end_date=parameter_search_end_date,
+            run_id=resolved_run_id,
+            workers=resolved_workers,
+        ),
     )
 
     walk_forward_validation = pd.DataFrame()
     if not skipped_oos:
-        walk_forward_validation = _profiled(
+        walk_forward_validation = _parallel_or_serial_profiled(
             profile_steps,
+            parallel_stage_summaries,
             "run_oos_validation",
-            lambda: run_oos_validation(
+            parallel_enabled=parallel_enabled,
+            requested_workers=resolved_workers,
+            serial_runner=lambda: run_oos_validation(
                 train_start_date=str(train_start_date),
                 train_end_date=str(train_end_date),
                 validation_start_date=str(validation_start_date),
@@ -277,12 +318,25 @@ def run_strategy_research_workflow(
                 limit_param_combinations=limit_param_combinations,
                 run_id=resolved_run_id,
             ),
+            parallel_runner=lambda: run_oos_validation_parallel(
+                db_path=resolved_db_path,
+                versions=parameter_versions,
+                train_start_date=str(train_start_date),
+                train_end_date=str(train_end_date),
+                validation_start_date=str(validation_start_date),
+                validation_end_date=str(validation_end_date),
+                run_id=resolved_run_id,
+                workers=resolved_workers,
+            ),
         )
 
-    trade_plan_backtest_output = _profiled(
+    trade_plan_backtest_output = _parallel_or_serial_profiled(
         profile_steps,
+        parallel_stage_summaries,
         "run_trade_plan_backtest",
-        lambda: run_trade_plan_backtest(
+        parallel_enabled=parallel_enabled,
+        requested_workers=resolved_workers,
+        serial_runner=lambda: run_trade_plan_backtest(
             db_path=resolved_db_path,
             start_date=train_start_date,
             end_date=train_end_date,
@@ -290,6 +344,15 @@ def run_strategy_research_workflow(
             strategy_evaluation=version_evaluation,
             run_id=resolved_run_id,
             return_diagnostics=True,
+        ),
+        parallel_runner=lambda: run_trade_plan_backtest_parallel(
+            db_path=resolved_db_path,
+            start_date=train_start_date,
+            end_date=train_end_date,
+            strategy_signals=historical_signals,
+            strategy_evaluation=version_evaluation,
+            run_id=resolved_run_id,
+            workers=resolved_workers,
         ),
     )
     historical_trade_plans, trade_plan_backtest_results, trade_plan_performance, trade_plan_diagnostics = (
@@ -418,6 +481,15 @@ def run_strategy_research_workflow(
         "active_candidate_config_path": candidate_config_path if export_candidate_config else None,
         "limit_strategies": limit_strategies,
         "limit_param_combinations": limit_param_combinations,
+        "workers": resolved_workers,
+        "parallel_enabled": parallel_enabled,
+        "parallelized_steps": PARALLELIZED_STEPS if parallel_enabled else [],
+        "parallel_stage_summaries": parallel_stage_summaries,
+        "parallel_worker_errors": [
+            error
+            for stage in parallel_stage_summaries
+            for error in stage.get("worker_errors", [])
+        ],
         "profile_steps": profile_steps,
         "table_total_counts": table_total_rows,
     }
@@ -454,6 +526,90 @@ def _profiled(profile_steps: list[dict[str, Any]], function_name: str, runner):
     return result
 
 
+def _parallel_or_serial_profiled(
+    profile_steps: list[dict[str, Any]],
+    parallel_stage_summaries: list[dict[str, Any]],
+    function_name: str,
+    *,
+    parallel_enabled: bool,
+    requested_workers: int,
+    serial_runner,
+    parallel_runner,
+):
+    if not parallel_enabled:
+        return _profiled(profile_steps, function_name, serial_runner)
+    return _profiled_parallel(
+        profile_steps,
+        parallel_stage_summaries,
+        function_name,
+        parallel_runner,
+        requested_workers=requested_workers,
+    )
+
+
+def _profiled_parallel(
+    profile_steps: list[dict[str, Any]],
+    parallel_stage_summaries: list[dict[str, Any]],
+    function_name: str,
+    runner,
+    *,
+    requested_workers: int,
+):
+    started_at = time.perf_counter()
+    try:
+        output = runner()
+    except Exception as exc:
+        elapsed = time.perf_counter() - started_at
+        worker_errors = getattr(exc, "worker_errors", [])
+        failure_summary = {
+            "stage_name": function_name,
+            "status": "failed",
+            "requested_workers": requested_workers,
+            "workers": min(requested_workers, len(worker_errors)) if worker_errors else 0,
+            "elapsed_seconds": elapsed,
+            "rows": 0,
+            "worker_logs": [error.get("worker_log", {}) for error in worker_errors],
+            "worker_errors": worker_errors,
+        }
+        parallel_stage_summaries.append(failure_summary)
+        profile_steps.append(
+            {
+                "function_name": function_name,
+                "status": "failed",
+                "elapsed_seconds": elapsed,
+                "rows": 0,
+            }
+        )
+        print(f"[profile] {function_name} failed elapsed={elapsed:.2f}s", flush=True)
+        setattr(exc, "parallel_stage_summaries", list(parallel_stage_summaries))
+        setattr(exc, "profile_steps", list(profile_steps))
+        raise
+
+    elapsed = time.perf_counter() - started_at
+    if not isinstance(output, ParallelStageOutput):
+        raise TypeError(f"{function_name} parallel runner must return ParallelStageOutput")
+    result = output.result
+    summary = dict(output.summary)
+    summary["status"] = "success"
+    summary["elapsed_seconds"] = elapsed
+    parallel_stage_summaries.append(summary)
+    rows = _profile_rows(result)
+    profile_steps.append(
+        {
+            "function_name": function_name,
+            "status": "success",
+            "elapsed_seconds": elapsed,
+            "rows": rows,
+        }
+    )
+    print(
+        f"[profile] {function_name} rows={rows} elapsed={elapsed:.2f}s "
+        f"workers={summary.get('workers', 0)}",
+        flush=True,
+    )
+    return result
+
+
 def _profile_rows(result: Any) -> int:
     if isinstance(result, pd.DataFrame):
         return len(result)
@@ -482,7 +638,17 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--limit-strategies", type=int, default=None)
     parser.add_argument("--limit-param-combinations", type=int, default=None)
     parser.add_argument("--dry-run-plan", action="store_true")
+    parser.add_argument("--workers", type=int, default=1)
     return parser.parse_args(argv)
+
+
+def _log_parallel_thread_hint(workers: int) -> None:
+    print(
+        "[parallel] "
+        f"workers={workers} enabled=True; suggested env: "
+        "OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1",
+        flush=True,
+    )
 
 
 def main(argv: Sequence[str] | None = None) -> None:
@@ -493,8 +659,11 @@ def main(argv: Sequence[str] | None = None) -> None:
             parameter_search_config_path=args.parameter_search_config_path,
             limit_strategies=args.limit_strategies,
             limit_param_combinations=args.limit_param_combinations,
+            workers=args.workers,
         )
         print("Strategy research dry-run plan.")
+        print(f"workers: {plan.get('workers', max(1, int(args.workers or 1)))}")
+        print(f"parallel enabled: {plan.get('parallel_enabled', max(1, int(args.workers or 1)) > 1)}")
         print(f"enabled strategy versions count: {plan['enabled_strategy_versions_count']}")
         print("strategy versions:")
         for row in plan["strategy_versions"]:
@@ -523,6 +692,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         candidate_config_path=args.candidate_config_path,
         limit_strategies=args.limit_strategies,
         limit_param_combinations=args.limit_param_combinations,
+        workers=args.workers,
     )
 
     print("Strategy research workflow finished.")
@@ -537,6 +707,8 @@ def main(argv: Sequence[str] | None = None) -> None:
         "trade_plan_backtest_performance_rows",
         "strategy_admission_rows",
         "active_candidate_config_path",
+        "workers",
+        "parallel_enabled",
     ]:
         print(f"{key}: {summary[key]}")
 

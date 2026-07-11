@@ -75,6 +75,37 @@ def test_default_calls_all_strategy_ops_steps(tmp_path, monkeypatch):
     assert summary["backtest_analysis_agent_path"] == "reports/llm_backtest_analysis_2026-06-05.md"
     assert summary["strategy_research_suggestions_path"] == "reports/strategy_research_suggestions_2026-06-05.json"
     assert summary["parameter_search_space_candidate_path"] == "reports/parameter_search_space_candidate_2026-06-05.json"
+    assert summary["workers"] == 1
+    assert summary["parallel_enabled"] is False
+
+
+def test_cli_workers_default_and_override():
+    assert workflow._parse_args([]).workers == 1
+    assert workflow._parse_args(["--workers", "2"]).workers == 2
+
+
+def test_dry_run_plan_displays_workers_without_running_workflow(monkeypatch, capsys):
+    monkeypatch.setattr(
+        workflow,
+        "build_strategy_research_dry_run_plan",
+        lambda **kwargs: {
+            "enabled_strategy_versions_count": 1,
+            "parameter_search_combinations_count": 2,
+            "estimated_admission_candidates_count": 3,
+        },
+    )
+    monkeypatch.setattr(
+        workflow,
+        "run_strategy_ops_workflow",
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError("workflow must not run")),
+    )
+
+    workflow.main(["--dry-run-plan", "--workers", "2"])
+
+    output = capsys.readouterr().out
+    assert "workers: 2" in output
+    assert "parallel enabled: True" in output
+    assert "does not execute parallel computation" in output
 
 
 def test_strategy_research_disables_candidate_config_and_passes_dates(tmp_path, monkeypatch):
@@ -251,6 +282,57 @@ def test_failure_still_generates_strategy_ops_report_with_traceback(tmp_path, mo
     assert "skipped_count: 4" in content
     assert "run_strategy_research_workflow | failed" in content
     assert "RuntimeError: strategy failed" in content
+
+
+def test_parallel_worker_failure_is_preserved_in_summary_and_report(tmp_path, monkeypatch):
+    calls = []
+    _patch_successful_steps(monkeypatch, calls)
+
+    def fail_strategy_research(**kwargs):
+        exc = RuntimeError("parallel stage failed")
+        worker_error = {
+            "stage_name": "run_parameter_search",
+            "worker_index": 1,
+            "pid": 1234,
+            "error": "worker boom",
+        }
+        exc.parallel_stage_summaries = [
+            {
+                "stage_name": "run_parameter_search",
+                "status": "failed",
+                "requested_workers": 2,
+                "workers": 1,
+                "elapsed_seconds": 0.25,
+                "rows": 0,
+                "worker_errors": [worker_error],
+            }
+        ]
+        exc.profile_steps = [
+            {
+                "function_name": "run_parameter_search",
+                "status": "failed",
+                "elapsed_seconds": 0.25,
+                "rows": 0,
+            }
+        ]
+        raise exc
+
+    monkeypatch.setattr(workflow, "run_strategy_research_workflow", fail_strategy_research)
+
+    summary = workflow.run_strategy_ops_workflow(
+        db_path="test.duckdb",
+        output_dir=str(tmp_path),
+        build_factors=False,
+        workers=2,
+        skip_llm_agents=True,
+        run_health_check=False,
+    )
+
+    assert summary["failed_count"] == 1
+    assert summary["parallel_worker_errors"][0]["error"] == "worker boom"
+    content = Path(summary["strategy_ops_report_path"]).read_text(encoding="utf-8")
+    assert "run_parameter_search | failed | 2 | 1" in content
+    assert "worker boom" in content
 
 
 def test_smoke_mode_limits_strategy_research_and_skips_expensive_steps(tmp_path, monkeypatch):

@@ -13,9 +13,11 @@ from typing import Any
 
 from src.config import settings
 from src.diagnostics.system_health import run_system_health_check
+from src.pipeline.parallel_strategy_research import PARALLELIZED_STEPS
 from src.pipeline.run_backtest_analysis_agent import run_backtest_analysis_agent_pipeline
 from src.pipeline.run_factor_build_workflow import run_factor_build_workflow
 from src.pipeline.run_parameter_iteration_agent import run_parameter_iteration_agent_pipeline
+from src.pipeline.run_strategy_research_workflow import build_dry_run_plan as build_strategy_research_dry_run_plan
 from src.pipeline.run_strategy_research_agent import run_strategy_research_agent_pipeline
 from src.pipeline.run_strategy_research_workflow import run_strategy_research_workflow
 from src.pipeline.run_system_health_check import export_system_health_report
@@ -48,6 +50,7 @@ def run_strategy_ops_workflow(
     limit_strategies: int | None = None,
     limit_param_combinations: int | None = None,
     skip_llm_agents: bool = False,
+    workers: int = 1,
 ) -> dict:
     """Run the staged strategy research workflow and return a summary.
 
@@ -63,6 +66,7 @@ def run_strategy_ops_workflow(
     effective_parameter_iteration_agent = run_parameter_iteration_agent and not (skip_llm_agents or smoke_mode)
     effective_health_check = run_health_check and not smoke_mode
     report_date = date.today().isoformat()
+    resolved_workers = max(1, int(workers or 1))
     summary: dict[str, Any] = {
         "db_path": resolved_db_path,
         "run_id": run_id,
@@ -75,6 +79,11 @@ def run_strategy_ops_workflow(
         "limit_strategies": limit_strategies,
         "limit_param_combinations": limit_param_combinations,
         "skip_llm_agents": skip_llm_agents,
+        "workers": resolved_workers,
+        "parallel_enabled": resolved_workers > 1,
+        "parallelized_steps": [],
+        "parallel_stage_summaries": [],
+        "parallel_worker_errors": [],
         "steps": [],
         "profile_steps": [],
         "success_count": 0,
@@ -125,6 +134,7 @@ def run_strategy_ops_workflow(
                 limit_strategies=limit_strategies,
                 limit_param_combinations=limit_param_combinations,
                 run_id=run_id,
+                workers=resolved_workers,
             ),
             path_mappings={
                 "strategy_evaluation_report_path": "strategy_evaluation_report_path",
@@ -234,6 +244,14 @@ def _run_or_skip(
         )
         summary["failed_count"] += 1
         summary["errors"].append({"step_name": step_name, "error": error, "traceback": error_traceback})
+        for profile_step in getattr(exc, "profile_steps", []):
+            summary["profile_steps"].append({"parent_step_name": step_name, **profile_step})
+        failure_stages = list(getattr(exc, "parallel_stage_summaries", []))
+        if failure_stages:
+            summary["parallel_stage_summaries"].extend(failure_stages)
+            summary["parallelized_steps"] = list(PARALLELIZED_STEPS)
+            for stage in failure_stages:
+                summary["parallel_worker_errors"].extend(stage.get("worker_errors") or [])
         return
 
     for summary_key, result_key in path_mappings.items():
@@ -245,6 +263,15 @@ def _run_or_skip(
     if isinstance(result, dict) and result.get("profile_steps"):
         for profile_step in result["profile_steps"]:
             summary["profile_steps"].append({"parent_step_name": step_name, **profile_step})
+    if isinstance(result, dict):
+        if result.get("parallel_enabled") is not None:
+            summary["parallel_enabled"] = bool(result.get("parallel_enabled"))
+        if result.get("parallelized_steps") is not None:
+            summary["parallelized_steps"] = list(result.get("parallelized_steps") or [])
+        if result.get("parallel_stage_summaries"):
+            summary["parallel_stage_summaries"].extend(result.get("parallel_stage_summaries") or [])
+        if result.get("parallel_worker_errors"):
+            summary["parallel_worker_errors"].extend(result.get("parallel_worker_errors") or [])
 
     elapsed = time.perf_counter() - started_at
     rows = _result_rows(result)
@@ -318,6 +345,9 @@ def _build_strategy_ops_markdown(summary: dict) -> str:
         f"- limit_strategies: {summary.get('limit_strategies')}",
         f"- limit_param_combinations: {summary.get('limit_param_combinations')}",
         f"- skip_llm_agents: {summary.get('skip_llm_agents')}",
+        f"- workers: {summary.get('workers')}",
+        f"- parallel_enabled: {summary.get('parallel_enabled')}",
+        f"- parallelized_steps: {', '.join(summary.get('parallelized_steps') or []) or '无'}",
         f"- db_path: {summary.get('db_path')}",
         f"- run_id: {summary.get('run_id')}",
         f"- success_count: {summary.get('success_count')}",
@@ -386,7 +416,51 @@ def _build_strategy_ops_markdown(summary: dict) -> str:
     lines.extend(
         [
             "",
-            "## 六、失败步骤",
+            "## 六、并行阶段",
+            "",
+            "建议多进程运行前设置: `OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1`。",
+            "",
+            "| stage_name | status | requested_workers | workers | rows | elapsed_seconds | worker_errors |",
+            "| --- | --- | ---: | ---: | ---: | ---: | --- |",
+        ]
+    )
+    parallel_stage_summaries = summary.get("parallel_stage_summaries", [])
+    if parallel_stage_summaries:
+        for item in parallel_stage_summaries:
+            worker_errors = item.get("worker_errors") or []
+            lines.append(
+                "| {stage_name} | {status} | {requested_workers} | {workers} | {rows} | {elapsed_seconds:.2f} | {worker_errors} |".format(
+                    stage_name=_markdown_cell(item.get("stage_name", "")),
+                    status=_markdown_cell(item.get("status", "")),
+                    requested_workers=item.get("requested_workers") or summary.get("workers") or 1,
+                    workers=int(item.get("workers", 0) or 0),
+                    rows=int(item.get("rows", 0) or 0),
+                    elapsed_seconds=float(item.get("elapsed_seconds", 0.0) or 0.0),
+                    worker_errors=_markdown_cell("; ".join(str(error.get("error", "")) for error in worker_errors) or ""),
+                )
+            )
+    else:
+        lines.append("| 未启用 | skipped | 0 | 0 | 0 | 0.00 |  |")
+
+    worker_errors = summary.get("parallel_worker_errors", [])
+    lines.extend(["", "### Worker 异常", ""])
+    if worker_errors:
+        for error in worker_errors:
+            lines.append(
+                "- stage={stage} worker_index={worker_index} pid={pid} error={error}".format(
+                    stage=_markdown_cell(error.get("stage_name", "")),
+                    worker_index=error.get("worker_index", ""),
+                    pid=error.get("pid", ""),
+                    error=_markdown_cell(error.get("error", "")),
+                )
+            )
+    else:
+        lines.append("- 无")
+
+    lines.extend(
+        [
+            "",
+            "## 七、失败步骤",
             "",
         ]
     )
@@ -396,7 +470,7 @@ def _build_strategy_ops_markdown(summary: dict) -> str:
     else:
         lines.append("- 无")
 
-    lines.extend(["", "## 七、错误 Traceback", ""])
+    lines.extend(["", "## 八、错误 Traceback", ""])
     failed_steps = [step for step in summary.get("steps", []) if step.get("status") == "failed"]
     if failed_steps:
         for step in failed_steps:
@@ -416,7 +490,7 @@ def _build_strategy_ops_markdown(summary: dict) -> str:
     lines.extend(
         [
             "",
-            "## 八、人工确认事项",
+            "## 九、人工确认事项",
             "",
             "- strategy_research_suggestions_*.json 只是研究建议；",
             "- parameter_search_space_candidate_*.json 只是候选参数；",
@@ -462,11 +536,27 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--limit-strategies", type=int, default=None)
     parser.add_argument("--limit-param-combinations", type=int, default=None)
     parser.add_argument("--skip-llm-agents", action="store_true")
+    parser.add_argument("--workers", type=int, default=1)
+    parser.add_argument("--dry-run-plan", action="store_true")
     return parser.parse_args(argv)
 
 
 def main(argv: Sequence[str] | None = None) -> None:
     args = _parse_args(argv)
+    if args.dry_run_plan:
+        plan = build_strategy_research_dry_run_plan(
+            limit_strategies=args.limit_strategies,
+            limit_param_combinations=args.limit_param_combinations,
+            workers=args.workers,
+        )
+        print("Strategy ops dry-run plan.")
+        print(f"workers: {max(1, int(args.workers or 1))}")
+        print(f"parallel enabled: {max(1, int(args.workers or 1)) > 1}")
+        print("dry-run-plan does not execute parallel computation.")
+        print(f"enabled strategy versions count: {plan['enabled_strategy_versions_count']}")
+        print(f"parameter search combinations count: {plan['parameter_search_combinations_count']}")
+        print(f"estimated admission candidates count: {plan['estimated_admission_candidates_count']}")
+        return
     summary = run_strategy_ops_workflow(
         train_start_date=args.train_start_date,
         train_end_date=args.train_end_date,
@@ -484,6 +574,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         limit_strategies=args.limit_strategies,
         limit_param_combinations=args.limit_param_combinations,
         skip_llm_agents=args.skip_llm_agents,
+        workers=args.workers,
     )
     _print_summary(summary)
 
@@ -493,6 +584,8 @@ def _print_summary(summary: dict) -> None:
     print(f"success_count: {summary['success_count']}")
     print(f"failed_count: {summary['failed_count']}")
     print(f"skipped_count: {summary['skipped_count']}")
+    print(f"workers: {summary['workers']}")
+    print(f"parallel_enabled: {summary['parallel_enabled']}")
     print(f"strategy_ops_report_path: {summary['strategy_ops_report_path']}")
     if summary.get("errors"):
         print(f"errors: {summary['errors']}")
