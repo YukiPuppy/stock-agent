@@ -37,9 +37,10 @@ def validate_strategy_versions_out_of_sample(
     validation_end_date: str,
     min_valid_count_train: int = 30,
     min_valid_count_validation: int = 10,
+    prepared_bars_by_period: dict[str, dict[str, pd.DataFrame]] | None = None,
 ) -> pd.DataFrame:
     enabled_versions = [version for version in versions if version.get("enabled", True)]
-    if daily_factors.empty or daily_bars.empty or not enabled_versions:
+    if daily_factors.empty or (daily_bars.empty and not prepared_bars_by_period) or not enabled_versions:
         return pd.DataFrame(columns=WALK_FORWARD_VALIDATION_COLUMNS)
 
     train_performance = _evaluate_period(
@@ -48,6 +49,7 @@ def validate_strategy_versions_out_of_sample(
         versions=enabled_versions,
         start_date=train_start_date,
         end_date=train_end_date,
+        prepared_bars_by_code=(prepared_bars_by_period or {}).get("train"),
     )
     validation_performance = _evaluate_period(
         daily_factors=daily_factors,
@@ -55,6 +57,7 @@ def validate_strategy_versions_out_of_sample(
         versions=enabled_versions,
         start_date=validation_start_date,
         end_date=validation_end_date,
+        prepared_bars_by_code=(prepared_bars_by_period or {}).get("validation"),
     )
 
     train_by_version = _performance_by_version(train_performance)
@@ -135,6 +138,7 @@ def _evaluate_period(
     versions: list[dict],
     start_date: str,
     end_date: str,
+    prepared_bars_by_code: dict[str, pd.DataFrame] | None = None,
 ) -> pd.DataFrame:
     signals = generate_historical_signals_for_versions(
         daily_factors=daily_factors,
@@ -142,8 +146,10 @@ def _evaluate_period(
         start_date=start_date,
         end_date=end_date,
     )
-    bars = _filter_bars(daily_bars, start_date, end_date)
-    backtest_results = backtest_strategy_signals(signals, bars)
+    bars = _filter_bars(daily_bars, start_date, end_date) if prepared_bars_by_code is None else pd.DataFrame()
+    backtest_results = backtest_strategy_signals(
+        signals, bars, prepared_bars_by_code=prepared_bars_by_code
+    )
     return evaluate_strategy_performance(backtest_results)
 
 

@@ -1165,6 +1165,80 @@ class StockAgentStore:
             self._create_tables(con)
             return con.execute(query, params).fetchdf()
 
+    def save_research_strategy_signals(self, df: pd.DataFrame, run_id: str) -> None:
+        """Append one bounded strategy/version signal chunk for a research run."""
+        self._ensure_parent_dir()
+        columns = [
+            "trade_date", "code", "strategy_name", "strategy_version",
+            "signal_strength", "entry_reason", "risk_flags",
+        ]
+        normalized = self._normalize_dataframe(df, columns)
+        normalized = _normalize_daily_factor_keys(normalized)
+        normalized["strategy_version"] = normalized["strategy_version"].fillna("v1")
+        normalized["run_id"] = str(run_id)
+        normalized = normalized.drop_duplicates(
+            subset=["trade_date", "code", "strategy_name", "strategy_version"], keep="last"
+        )
+        with self._connect() as con:
+            self._create_tables(con)
+            if normalized.empty:
+                return
+            con.register("incoming_research_strategy_signals", normalized)
+            con.execute(
+                """
+                DELETE FROM research_strategy_signals
+                USING incoming_research_strategy_signals
+                WHERE research_strategy_signals.run_id = incoming_research_strategy_signals.run_id
+                  AND research_strategy_signals.trade_date = incoming_research_strategy_signals.trade_date
+                  AND research_strategy_signals.code = incoming_research_strategy_signals.code
+                  AND research_strategy_signals.strategy_name = incoming_research_strategy_signals.strategy_name
+                  AND research_strategy_signals.strategy_version = incoming_research_strategy_signals.strategy_version
+                """
+            )
+            con.execute(
+                """
+                INSERT INTO research_strategy_signals
+                    (run_id, trade_date, code, strategy_name, strategy_version,
+                     signal_strength, entry_reason, risk_flags)
+                SELECT run_id, trade_date, code, strategy_name, strategy_version,
+                       signal_strength, entry_reason, risk_flags
+                FROM incoming_research_strategy_signals
+                """
+            )
+            con.unregister("incoming_research_strategy_signals")
+
+    def load_research_strategy_signals(
+        self,
+        run_id: str,
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> pd.DataFrame:
+        conditions = ["run_id = ?"]
+        params: list[object] = [run_id]
+        if start_date is not None:
+            conditions.append("trade_date >= ?")
+            params.append(_normalize_trade_date_value(start_date))
+        if end_date is not None:
+            conditions.append("trade_date <= ?")
+            params.append(_normalize_trade_date_value(end_date))
+        with self._connect() as con:
+            self._create_tables(con)
+            return con.execute(
+                f"""
+                SELECT trade_date, code, strategy_name, strategy_version,
+                       signal_strength, entry_reason, risk_flags
+                FROM research_strategy_signals
+                WHERE {' AND '.join(conditions)}
+                ORDER BY trade_date, signal_strength DESC, code, strategy_name, strategy_version
+                """,
+                params,
+            ).fetchdf()
+
+    def clear_research_strategy_signals(self, run_id: str) -> None:
+        with self._connect() as con:
+            self._create_tables(con)
+            con.execute("DELETE FROM research_strategy_signals WHERE run_id = ?", [run_id])
+
     def save_backtest_results(self, df: pd.DataFrame) -> None:
         self._ensure_parent_dir()
         normalized = self._normalize_dataframe(
@@ -3128,6 +3202,20 @@ class StockAgentStore:
             """
         )
         StockAgentStore._ensure_strategy_signals_schema(con)
+        con.execute(
+            """
+            CREATE TABLE IF NOT EXISTS research_strategy_signals (
+                run_id VARCHAR,
+                trade_date VARCHAR,
+                code VARCHAR,
+                strategy_name VARCHAR,
+                strategy_version VARCHAR,
+                signal_strength DOUBLE,
+                entry_reason VARCHAR,
+                risk_flags VARCHAR
+            )
+            """
+        )
         con.execute(
             """
             CREATE TABLE IF NOT EXISTS backtest_results (

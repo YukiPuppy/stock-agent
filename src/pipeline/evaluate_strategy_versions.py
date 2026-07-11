@@ -14,6 +14,7 @@ from src.research.strategy_version_evaluator import (
     build_active_strategy_config,
     evaluate_strategy_versions,
 )
+from src.pipeline.memory import collect_memory, log_memory
 
 
 def _resolve_db_path(db_path: str | None) -> str:
@@ -31,8 +32,11 @@ def run_strategy_version_evaluation(
 ) -> pd.DataFrame:
     resolved_db_path = _resolve_db_path(db_path)
     store = StockAgentStore(resolved_db_path)
-    if performance is None:
-        performance = store.load_strategy_version_performance()
+    # A workflow run always evaluates the small, persisted aggregate for its run_id;
+    # it never retains or consumes the full backtest result frame.
+    log_memory("strategy_version_evaluation", "before_read_aggregate")
+    if performance is None or run_id is not None:
+        performance = store.load_strategy_version_performance(run_id=run_id)
     evaluation = evaluate_strategy_versions(
         performance,
         min_valid_count=min_valid_count,
@@ -43,6 +47,8 @@ def run_strategy_version_evaluation(
     if run_id is not None:
         evaluation = evaluation.assign(run_id=run_id)
     store.save_strategy_version_evaluation(evaluation)
+    del performance
+    collect_memory("strategy_version_evaluation")
     return evaluation
 
 

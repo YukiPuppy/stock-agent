@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import gc
 import time
 import uuid
 from collections.abc import Sequence
@@ -34,6 +35,7 @@ from src.pipeline.search_strategy_params import run_parameter_search
 from src.pipeline.validate_strategy_oos import run_oos_validation
 from src.research.parameter_search import generate_search_versions, load_parameter_search_space
 from src.strategy.strategy_versions import iter_strategy_versions, load_strategy_versions
+from src.pipeline.memory import log_memory
 
 
 def _resolve_db_path(db_path: str | None) -> str:
@@ -42,7 +44,7 @@ def _resolve_db_path(db_path: str | None) -> str:
 
 def _row_count(value: object) -> int:
     if isinstance(value, pd.DataFrame):
-        return len(value)
+        return int(value.attrs.get("row_count", len(value)))
     return 0
 
 
@@ -204,6 +206,13 @@ def _log_current_and_total_rows(current_rows: dict[str, int], table_total_rows: 
         )
 
 
+def _run_parameter_search_streaming(**kwargs):
+    """Keep monkeypatched workflow tests compatible while bounding production output."""
+    if getattr(run_parameter_search, "__module__", "") == "src.pipeline.search_strategy_params":
+        kwargs["materialize_results"] = False
+    return run_parameter_search(**kwargs)
+
+
 def run_strategy_research_workflow(
     db_path: str | None = None,
     output_dir: str = "reports",
@@ -255,6 +264,14 @@ def run_strategy_research_workflow(
     version_backtest_results, version_performance, historical_signals = _unpack_version_backtest_output(
         version_backtest_output
     )
+    version_backtest_results_count = _row_count(version_backtest_results)
+    historical_signals_count = _row_count(historical_signals)
+    # Real streaming output is persisted by run_id. Do not keep even a single
+    # strategy's signals alive until the trade-plan stage.
+    signals_for_trade_plan = None if "row_count" in historical_signals.attrs else historical_signals
+    del version_backtest_output, version_backtest_results, historical_signals
+    gc.collect()
+    log_memory("research_workflow:after_version_backtest", "released")
     version_evaluation = _profiled(
         profile_steps,
         "run_strategy_version_evaluation",
@@ -280,7 +297,7 @@ def run_strategy_research_workflow(
         "run_parameter_search",
         parallel_enabled=parallel_enabled,
         requested_workers=resolved_workers,
-        serial_runner=lambda: run_parameter_search(
+        serial_runner=lambda: _run_parameter_search_streaming(
             start_date=parameter_search_start_date,
             end_date=parameter_search_end_date,
             config_path=parameter_search_config_path,
@@ -298,6 +315,10 @@ def run_strategy_research_workflow(
             workers=resolved_workers,
         ),
     )
+    parameter_backtest_count = _row_count(parameter_backtest_results)
+    del parameter_backtest_results
+    gc.collect()
+    log_memory("research_workflow:after_parameter_search", "released")
 
     walk_forward_validation = pd.DataFrame()
     if not skipped_oos:
@@ -340,7 +361,7 @@ def run_strategy_research_workflow(
             db_path=resolved_db_path,
             start_date=train_start_date,
             end_date=train_end_date,
-            strategy_signals=historical_signals,
+            strategy_signals=signals_for_trade_plan,
             strategy_evaluation=version_evaluation,
             run_id=resolved_run_id,
             return_diagnostics=True,
@@ -349,7 +370,7 @@ def run_strategy_research_workflow(
             db_path=resolved_db_path,
             start_date=train_start_date,
             end_date=train_end_date,
-            strategy_signals=historical_signals,
+            strategy_signals=signals_for_trade_plan,
             strategy_evaluation=version_evaluation,
             run_id=resolved_run_id,
             workers=resolved_workers,
@@ -358,6 +379,9 @@ def run_strategy_research_workflow(
     historical_trade_plans, trade_plan_backtest_results, trade_plan_performance, trade_plan_diagnostics = (
         _unpack_trade_plan_backtest_output(trade_plan_backtest_output)
     )
+    del trade_plan_backtest_output, signals_for_trade_plan
+    gc.collect()
+    log_memory("research_workflow:after_trade_plan_backtest", "released")
     _append_chain_profile_steps(profile_steps, trade_plan_diagnostics)
 
     admission = _profiled(
@@ -458,14 +482,14 @@ def run_strategy_research_workflow(
         "db_path": resolved_db_path,
         "output_dir": output_dir,
         "run_id": resolved_run_id,
-        "strategy_version_backtest_results_rows": _row_count(version_backtest_results),
+        "strategy_version_backtest_results_rows": version_backtest_results_count,
         "strategy_version_performance_rows": _row_count(version_performance),
         "strategy_version_evaluation_rows": _row_count(version_evaluation),
-        "parameter_search_backtest_rows": _row_count(parameter_backtest_results),
+        "parameter_search_backtest_rows": parameter_backtest_count,
         "parameter_search_performance_rows": _row_count(parameter_performance),
         "parameter_search_results_rows": _row_count(parameter_results),
         "walk_forward_validation_rows": _row_count(walk_forward_validation),
-        "historical_signals_rows": _row_count(historical_signals),
+        "historical_signals_rows": historical_signals_count,
         "historical_candidates_rows": int(trade_plan_diagnostics.get("historical_candidates", 0)),
         "historical_trade_plans_rows": _row_count(historical_trade_plans),
         "triggered_trades_rows": int(trade_plan_diagnostics.get("triggered_trades", 0)),
@@ -497,6 +521,7 @@ def run_strategy_research_workflow(
 
 def _profiled(profile_steps: list[dict[str, Any]], function_name: str, runner):
     started_at = time.perf_counter()
+    rss_before = log_memory(function_name, "before")
     try:
         result = runner()
     except Exception:
@@ -522,6 +547,9 @@ def _profiled(profile_steps: list[dict[str, Any]], function_name: str, runner):
             "rows": rows,
         }
     )
+    rss_after = log_memory(function_name, "after")
+    profile_steps[-1]["rss_mb_before"] = rss_before
+    profile_steps[-1]["rss_mb_after"] = rss_after
     print(f"[profile] {function_name} rows={rows} elapsed={elapsed:.2f}s", flush=True)
     return result
 

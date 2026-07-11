@@ -47,6 +47,7 @@ def backtest_strategy_signals(
     strategy_signals: pd.DataFrame,
     daily_bars: pd.DataFrame,
     holding_days: list[int] | None = None,
+    prepared_bars_by_code: dict[str, pd.DataFrame] | None = None,
 ) -> pd.DataFrame:
     """Backtest signals by buying next trading day's open and exiting later closes."""
     periods = holding_days or DEFAULT_HOLDING_DAYS
@@ -54,7 +55,7 @@ def backtest_strategy_signals(
     if strategy_signals.empty:
         return pd.DataFrame(columns=result_columns)
 
-    bars_by_code = _prepare_bars_by_code(daily_bars)
+    bars_by_code = prepared_bars_by_code if prepared_bars_by_code is not None else _prepare_bars_by_code(daily_bars)
     signals = strategy_signals.copy()
     if "strategy_version" not in signals.columns:
         signals["strategy_version"] = "v1"
@@ -181,6 +182,11 @@ def _prepare_bars_by_code(daily_bars: pd.DataFrame) -> dict[str, pd.DataFrame]:
         code: group.reset_index(drop=True)
         for code, group in bars.groupby("code", sort=False)
     }
+
+
+def prepare_bars_by_code(daily_bars: pd.DataFrame) -> dict[str, pd.DataFrame]:
+    """Prepare immutable lookup chunks once for repeated version backtests."""
+    return _prepare_bars_by_code(daily_bars)
 
 
 def _date_key(series: pd.Series) -> pd.Series:

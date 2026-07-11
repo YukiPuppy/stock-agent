@@ -3,16 +3,19 @@
 from __future__ import annotations
 
 import argparse
+import gc
 from collections.abc import Sequence
 
 import pandas as pd
 
-from src.backtest.signal_backtester import backtest_strategy_signals, evaluate_strategy_performance
-from src.backtest.strategy_version_runner import generate_historical_signals_for_versions
+from src.backtest.signal_backtester import backtest_strategy_signals, evaluate_strategy_performance, prepare_bars_by_code
+from src.backtest.strategy_version_runner import generate_historical_signals_for_version
 from src.config.settings import DB_PATH
 from src.database.duckdb_store import StockAgentStore
 from src.research.parameter_search import generate_search_versions, load_parameter_search_space
 from src.research.strategy_version_evaluator import evaluate_strategy_versions
+from src.pipeline.memory import collect_memory, load_factor_chunk, log_memory
+from src.strategy.date_utils import TRADE_DATE_KEY_COLUMN, normalize_trade_date_series
 
 
 def _resolve_db_path(db_path: str | None) -> str:
@@ -31,44 +34,89 @@ def run_parameter_search(
     limit_strategies: int | None = None,
     limit_param_combinations: int | None = None,
     run_id: str | None = None,
+    materialize_results: bool = True,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     resolved_db_path = _resolve_db_path(db_path)
     store = StockAgentStore(resolved_db_path)
-    daily_factors = store.load_daily_factors(start_date=start_date, end_date=end_date)
-    daily_bars = store.load_daily_bars(start_date=start_date, end_date=end_date)
     config = load_parameter_search_space(config_path)
     versions = generate_search_versions(
         config,
         limit_strategies=limit_strategies,
         limit_param_combinations=limit_param_combinations,
     )
+    daily_bars = store.load_daily_bars(start_date=start_date, end_date=end_date)
+    prepared_bars = prepare_bars_by_code(daily_bars)
+    del daily_bars
+    gc.collect()
 
-    historical_signals = generate_historical_signals_for_versions(
-        daily_factors=daily_factors,
-        versions=versions,
-        start_date=start_date,
-        end_date=end_date,
-    )
-    backtest_results = backtest_strategy_signals(historical_signals, daily_bars)
-    performance = evaluate_strategy_performance(backtest_results)
-    evaluation = evaluate_strategy_versions(
-        performance,
-        min_valid_count=min_valid_count,
-        min_win_rate_3d=min_win_rate_3d,
-        min_avg_return_3d=min_avg_return_3d,
-        max_avg_drawdown_3d=max_avg_drawdown_3d,
-    )
+    log_memory("parameter_search", "loaded_inputs")
+    performance_frames: list[pd.DataFrame] = []
+    evaluation_frames: list[pd.DataFrame] = []
+    materialized_backtest = pd.DataFrame()
+    backtest_frames: list[pd.DataFrame] = []
+    backtest_count = 0
+    daily_factors: pd.DataFrame | None = None
+    loaded_strategy_name: str | None = None
+    for index, version in enumerate(versions, start=1):
+        name = str(version["strategy_name"])
+        version_name = str(version["strategy_version"])
+        if name != loaded_strategy_name:
+            if daily_factors is not None:
+                del daily_factors
+                gc.collect()
+            daily_factors = load_factor_chunk(store, [version], start_date, end_date)
+            daily_factors[TRADE_DATE_KEY_COLUMN] = normalize_trade_date_series(daily_factors["trade_date"])
+            loaded_strategy_name = name
+            log_memory(f"parameter_search:{name}", "factor_chunk_loaded")
+        stage = f"parameter_search:{name}:{version_name}"
+        log_memory(stage, "before")
+        historical_signals = generate_historical_signals_for_version(
+            daily_factors=daily_factors,
+            strategy_name=name,
+            strategy_version=version_name,
+            params=version.get("params", {}),
+            start_date=start_date,
+            end_date=end_date,
+        )
+        backtest_results = backtest_strategy_signals(
+            historical_signals, pd.DataFrame(), prepared_bars_by_code=prepared_bars
+        )
+        performance = evaluate_strategy_performance(backtest_results)
+        evaluation = evaluate_strategy_versions(
+            performance,
+            min_valid_count=min_valid_count,
+            min_win_rate_3d=min_win_rate_3d,
+            min_avg_return_3d=min_avg_return_3d,
+            max_avg_drawdown_3d=max_avg_drawdown_3d,
+        )
+        if run_id is not None:
+            backtest_results = backtest_results.assign(run_id=run_id)
+            performance = performance.assign(run_id=run_id)
+            evaluation = evaluation.assign(run_id=run_id)
+        store.save_parameter_search_backtest_results(backtest_results)
+        store.save_parameter_search_performance(performance)
+        store.save_parameter_search_results(evaluation)
+        backtest_count += len(backtest_results)
+        performance_frames.append(performance)
+        evaluation_frames.append(evaluation)
+        if materialize_results:
+            backtest_frames.append(backtest_results)
+        del historical_signals, backtest_results, performance, evaluation
+        gc.collect()
+        log_memory(stage, f"after_written_{index}_of_{len(versions)}")
 
-    if run_id is not None:
-        backtest_results = backtest_results.assign(run_id=run_id)
-        performance = performance.assign(run_id=run_id)
-        evaluation = evaluation.assign(run_id=run_id)
-
-    store.save_parameter_search_backtest_results(backtest_results)
-    store.save_parameter_search_performance(performance)
-    store.save_parameter_search_results(evaluation)
-
-    return backtest_results, performance, evaluation
+    if materialize_results:
+        materialized_backtest = pd.concat(backtest_frames, ignore_index=True) if backtest_frames else pd.DataFrame()
+    performance = pd.concat(performance_frames, ignore_index=True) if performance_frames else pd.DataFrame()
+    evaluation = pd.concat(evaluation_frames, ignore_index=True) if evaluation_frames else pd.DataFrame()
+    if not evaluation.empty and "evaluation_score" in evaluation.columns:
+        evaluation = evaluation.sort_values("evaluation_score", ascending=False).reset_index(drop=True)
+    materialized_backtest.attrs["row_count"] = backtest_count
+    del backtest_frames, performance_frames, evaluation_frames, prepared_bars
+    if daily_factors is not None:
+        del daily_factors
+    collect_memory("parameter_search")
+    return materialized_backtest, performance, evaluation
 
 
 def _run_and_report(
