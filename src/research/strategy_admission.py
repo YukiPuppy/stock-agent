@@ -2,8 +2,15 @@
 
 from __future__ import annotations
 
+import json
+import logging
+import re
+
 import numpy as np
 import pandas as pd
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 STRATEGY_ADMISSION_COLUMNS = [
@@ -193,7 +200,12 @@ def _merge_trade_plan_performance(base: pd.DataFrame, performance: pd.DataFrame 
     if performance is None or performance.empty:
         return _ensure_trade_plan_columns(result)
 
-    trade = performance.copy()
+    trade = _select_buy_action_performance(performance.copy())
+    if trade.empty:
+        LOGGER.warning(
+            "trade plan performance has no buy-like action rows; strategy admission trade_plan_* metrics remain empty"
+        )
+        return _ensure_trade_plan_columns(result)
     rename_map = {}
     if "strategy_name" in trade.columns and "strategy_names" not in trade.columns:
         rename_map["strategy_name"] = "strategy_names"
@@ -214,10 +226,19 @@ def _merge_trade_plan_performance(base: pd.DataFrame, performance: pd.DataFrame 
         if column not in trade.columns:
             trade[column] = None
 
-    trade = trade.rename(columns={"strategy_names": "strategy_name", "strategy_versions": "strategy_version"})
-    trade["strategy_version"] = trade["strategy_version"].replace("", pd.NA).fillna("v1")
     for column in ["plan_count", "triggered_count", "valid_count", "trigger_rate", "win_rate", "avg_return", "avg_max_drawdown"]:
         trade[column] = pd.to_numeric(trade[column], errors="coerce")
+    valid_keys = {
+        (str(row["strategy_name"]).strip(), str(row["strategy_version"] or "v1").strip())
+        for _, row in base[["strategy_name", "strategy_version"]].dropna(subset=["strategy_name"]).iterrows()
+    }
+    trade = explode_trade_plan_strategy_dimensions(trade, valid_strategy_keys=valid_keys)
+    if trade.empty:
+        LOGGER.warning(
+            "trade plan performance strategy_names/strategy_versions could not be mapped to admission candidates; "
+            "strategy admission trade_plan_* metrics remain empty"
+        )
+        return _ensure_trade_plan_columns(result)
     trade = _aggregate_trade_plan_performance(trade)
     trade = trade.rename(
         columns={
@@ -243,7 +264,119 @@ def _merge_trade_plan_performance(base: pd.DataFrame, performance: pd.DataFrame 
         on=["strategy_name", "strategy_version"],
         how="left",
     )
+    matched_count = int(result["trade_plan_win_rate"].notna().sum())
+    if matched_count == 0:
+        LOGGER.warning(
+            "trade plan performance was parsed but no strategy_name/strategy_version keys matched admission candidates"
+        )
+    else:
+        LOGGER.info("mapped trade plan performance to %s admission candidates", matched_count)
     return _ensure_trade_plan_columns(result)
+
+
+def parse_strategy_dimension(value: object) -> list[str]:
+    """Parse a strategy-name/version dimension without assuming a single value."""
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple, set)):
+        parsed: list[str] = []
+        for item in value:
+            parsed.extend(parse_strategy_dimension(item))
+        return _deduplicate_dimension(parsed)
+    try:
+        if bool(pd.isna(value)):
+            return []
+    except (TypeError, ValueError):
+        pass
+
+    text = str(value).strip()
+    if not text or text.lower() in {"nan", "none", "null", "<na>"}:
+        return []
+    if text.startswith("["):
+        try:
+            payload = json.loads(text)
+        except (json.JSONDecodeError, TypeError):
+            payload = None
+        if isinstance(payload, list):
+            return parse_strategy_dimension(payload)
+
+    parts = re.split(r"\s*[,|;+]\s*", text)
+    cleaned = [part.strip().strip("\"'") for part in parts]
+    return _deduplicate_dimension(
+        part for part in cleaned if part and part.lower() not in {"nan", "none", "null", "<na>"}
+    )
+
+
+def explode_trade_plan_strategy_dimensions(
+    performance: pd.DataFrame,
+    valid_strategy_keys: set[tuple[str, str]] | None = None,
+) -> pd.DataFrame:
+    """Expand composite performance rows to strategy_name/strategy_version rows.
+
+    When a composite row contains more versions than names, existing admission
+    candidate keys disambiguate which versions belong to each strategy.
+    """
+    if performance is None or performance.empty:
+        return pd.DataFrame()
+    records: list[dict] = []
+    for _, row in performance.iterrows():
+        names = parse_strategy_dimension(row.get("strategy_names", row.get("strategy_name")))
+        versions = parse_strategy_dimension(row.get("strategy_versions", row.get("strategy_version")))
+        pairs = _pair_strategy_dimensions(names, versions, valid_strategy_keys or set())
+        for strategy_name, strategy_version in pairs:
+            record = row.to_dict()
+            record["strategy_name"] = strategy_name
+            record["strategy_version"] = strategy_version
+            records.append(record)
+    return pd.DataFrame(records)
+
+
+def _pair_strategy_dimensions(
+    names: list[str],
+    versions: list[str],
+    valid_strategy_keys: set[tuple[str, str]],
+) -> list[tuple[str, str]]:
+    if not names:
+        return []
+    versions = versions or ["v1"]
+    if len(names) == 1:
+        return [(names[0], version) for version in versions]
+
+    pairs: list[tuple[str, str]] = []
+    for index, name in enumerate(names):
+        matched = [version for version in versions if (name, version) in valid_strategy_keys]
+        if matched:
+            pairs.extend((name, version) for version in matched)
+        elif len(names) == len(versions):
+            pairs.append((name, versions[index]))
+        elif len(versions) == 1:
+            pairs.append((name, versions[0]))
+        elif (name, "v1") in valid_strategy_keys:
+            pairs.append((name, "v1"))
+    return list(dict.fromkeys(pairs))
+
+
+def _deduplicate_dimension(values) -> list[str]:
+    return list(dict.fromkeys(str(value).strip() for value in values if str(value).strip()))
+
+
+def _select_buy_action_performance(performance: pd.DataFrame) -> pd.DataFrame:
+    if "action" not in performance.columns:
+        return performance
+    actions = performance["action"].fillna("").astype(str).str.strip()
+    if actions.eq("").all():
+        return performance
+    lowered = actions.str.lower()
+    excluded = lowered.str.contains(r"仅观察|watch[_ ]?only|sell|卖出|减仓|平仓", regex=True)
+    explicit_buy = lowered.str.contains(r"buy|买入|低吸|回踩|突破|支撑|建仓|加仓|long", regex=True)
+    valid_count = pd.to_numeric(
+        performance.get("valid_count", pd.Series(0, index=performance.index)), errors="coerce"
+    ).fillna(0)
+    triggered_count = pd.to_numeric(
+        performance.get("triggered_count", pd.Series(0, index=performance.index)), errors="coerce"
+    ).fillna(0)
+    actual_buy = ~excluded & (explicit_buy | valid_count.gt(0) | triggered_count.gt(0))
+    return performance.loc[actual_buy].copy()
 
 
 def _aggregate_trade_plan_performance(trade: pd.DataFrame) -> pd.DataFrame:
@@ -253,9 +386,9 @@ def _aggregate_trade_plan_performance(trade: pd.DataFrame) -> pd.DataFrame:
     triggered_count = grouped["triggered_count"].sum(min_count=1)
     valid_count = grouped["valid_count"].sum(min_count=1)
 
-    trigger_rate_fallback = _weighted_mean_by_group(trade, "trigger_rate", "plan_count", group_columns)
-    trigger_rate = triggered_count / plan_count
-    trigger_rate = trigger_rate.where(plan_count.notna() & plan_count.ne(0), trigger_rate_fallback)
+    trigger_rate = _weighted_mean_by_group(trade, "trigger_rate", "plan_count", group_columns)
+    triggered_rate_fallback = triggered_count / plan_count
+    trigger_rate = trigger_rate.where(trigger_rate.notna(), triggered_rate_fallback)
 
     result = pd.DataFrame(
         {

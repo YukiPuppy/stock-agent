@@ -577,6 +577,8 @@ def main(argv: Sequence[str] | None = None) -> None:
         workers=args.workers,
     )
     _print_summary(summary)
+    if int(summary.get("failed_count", 0)) > 0:
+        raise SystemExit(1)
 
 
 def _print_summary(summary: dict) -> None:

@@ -1,6 +1,8 @@
 from datetime import date
 from pathlib import Path
 
+import pytest
+
 from src.pipeline import run_strategy_ops_workflow as workflow
 
 
@@ -82,6 +84,45 @@ def test_default_calls_all_strategy_ops_steps(tmp_path, monkeypatch):
 def test_cli_workers_default_and_override():
     assert workflow._parse_args([]).workers == 1
     assert workflow._parse_args(["--workers", "2"]).workers == 2
+
+
+def test_cli_returns_exit_code_one_when_any_step_failed(monkeypatch):
+    monkeypatch.setattr(
+        workflow,
+        "run_strategy_ops_workflow",
+        lambda **kwargs: {
+            "success_count": 1,
+            "failed_count": 1,
+            "skipped_count": 1,
+            "workers": 1,
+            "parallel_enabled": False,
+            "strategy_ops_report_path": "reports/test.md",
+            "errors": [{"step_name": "run_strategy_research_workflow", "error": "boom"}],
+        },
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        workflow.main([])
+
+    assert exc_info.value.code == 1
+
+
+def test_cli_skipped_steps_do_not_produce_failure_exit(monkeypatch):
+    monkeypatch.setattr(
+        workflow,
+        "run_strategy_ops_workflow",
+        lambda **kwargs: {
+            "success_count": 1,
+            "failed_count": 0,
+            "skipped_count": 5,
+            "workers": 1,
+            "parallel_enabled": False,
+            "strategy_ops_report_path": "reports/test.md",
+            "errors": [],
+        },
+    )
+
+    workflow.main([])
 
 
 def test_dry_run_plan_displays_workers_without_running_workflow(monkeypatch, capsys):

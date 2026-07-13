@@ -8,6 +8,7 @@ import pandas as pd
 
 from src.config.settings import DB_PATH
 from src.database.duckdb_store import StockAgentStore
+from src.pipeline.rerun_trade_plan_and_admission import export_trade_plan_backtest_report_low_memory
 from src.reports.trade_plan_backtest_report import generate_trade_plan_backtest_report
 
 
@@ -29,6 +30,8 @@ def export_trade_plan_backtest_report(
         backtest_results = store.load_trade_plan_backtest_results(run_id=run_id)
     if performance is None:
         performance = store.load_trade_plan_backtest_performance(run_id=run_id)
+    if run_id is not None and int(backtest_results.attrs.get("row_count", 0)) > 0 and backtest_results.empty:
+        return export_trade_plan_backtest_report_low_memory(store, run_id, performance, output_dir)
     resolved_report_date = report_date or _resolve_report_date(backtest_results)
     report = generate_trade_plan_backtest_report(backtest_results, performance, report_date=resolved_report_date)
     output_path = Path(output_dir) / f"trade_plan_backtest_{_format_date_for_filename(resolved_report_date)}.md"

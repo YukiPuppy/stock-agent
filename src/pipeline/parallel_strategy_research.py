@@ -16,7 +16,11 @@ import pandas as pd
 from src.backtest.historical_trade_plan_builder import build_historical_trade_plans
 from src.backtest.signal_backtester import backtest_strategy_signals, evaluate_strategy_performance
 from src.backtest.strategy_version_runner import generate_historical_signals_for_versions
-from src.backtest.trade_plan_backtester import backtest_trade_plans, evaluate_trade_plan_backtest
+from src.backtest.trade_plan_backtester import (
+    DEFAULT_MAX_HOLDING_DAYS,
+    backtest_trade_plans,
+    evaluate_trade_plan_backtest,
+)
 from src.database.duckdb_store import DAILY_FACTOR_COLUMNS, StockAgentStore
 from src.research.strategy_version_evaluator import evaluate_strategy_versions
 from src.research.walk_forward_validation import validate_strategy_versions_out_of_sample
@@ -217,7 +221,7 @@ def run_trade_plan_backtest_parallel(
     top_n: int = 20,
     max_plan_items: int = 5,
     min_amount_ma5: float = 0.0,
-    max_holding_days: int = 5,
+    max_holding_days: int = DEFAULT_MAX_HOLDING_DAYS,
 ) -> ParallelStageOutput:
     stage_started = time.perf_counter()
     store = StockAgentStore(db_path)
