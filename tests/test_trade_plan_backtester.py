@@ -2,8 +2,11 @@ import pandas as pd
 
 from src.backtest.trade_plan_backtester import (
     BACKTEST_RESULT_COLUMNS,
+    PERFORMANCE_COLUMNS,
     backtest_trade_plans,
     evaluate_trade_plan_backtest,
+    expand_trade_plans_for_holding_days,
+    holding_day_grid_for_strategy_names,
 )
 
 
@@ -116,6 +119,35 @@ def test_time_exit_and_risk_metrics_are_calculated():
     assert round(result.loc[0, "max_favorable"], 4) == 0.09
 
 
+def test_holding_days_can_exceed_five_and_max_holding_is_persisted_in_result():
+    bars = [
+        (f"2026-01-{day:02d}", 10.0, 10.4, 9.8, 10.0 + day / 100)
+        for day in range(2, 10)
+    ]
+    result = backtest_trade_plans(
+        _plan(stop_loss=1.0, take_profit_1=20.0, take_profit_2=21.0),
+        _bars(bars),
+        max_holding_days=8,
+    )
+
+    assert result.loc[0, "holding_days"] == 8
+    assert result.loc[0, "max_holding_days"] == 8
+    assert "max_holding_days" in BACKTEST_RESULT_COLUMNS
+
+
+def test_strategy_holding_day_grids_differ_and_expand_plan_rows():
+    assert holding_day_grid_for_strategy_names("oversold_rebound") == [3, 5, 8]
+    assert holding_day_grid_for_strategy_names("low_vol_trend") == [10, 15, 20, 30]
+    assert holding_day_grid_for_strategy_names("trend_pullback|breakout_volume") == [3, 5, 8, 10, 15, 20]
+
+    expanded = expand_trade_plans_for_holding_days(
+        pd.concat([_plan(strategy_names="oversold_rebound"), _plan(code="000001", strategy_names="low_vol_trend")]),
+        mode="strategy_grid",
+    )
+    assert sorted(expanded.loc[expanded["code"] == "600000", "max_holding_days"].tolist()) == [3, 5, 8]
+    assert sorted(expanded.loc[expanded["code"] == "000001", "max_holding_days"].tolist()) == [10, 15, 20, 30]
+
+
 def test_evaluate_trade_plan_backtest_summarizes_rates():
     results = pd.DataFrame(
         {
@@ -137,3 +169,5 @@ def test_evaluate_trade_plan_backtest_summarizes_rates():
     assert summary.loc[0, "trigger_rate"] == 2 / 3
     assert summary.loc[0, "win_rate"] == 0.5
     assert summary.loc[0, "avg_return"] == 0.025
+    assert summary.loc[0, "max_holding_days"] == 5
+    assert "max_holding_days" in PERFORMANCE_COLUMNS

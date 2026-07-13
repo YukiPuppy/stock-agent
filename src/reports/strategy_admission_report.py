@@ -57,6 +57,15 @@ def generate_strategy_admission_report(
         "",
     ]
     lines.extend(_summary_lines(admission))
+    if admission.empty or "trade_plan_win_rate" not in admission.columns or admission["trade_plan_win_rate"].notna().sum() == 0:
+        lines.extend(
+            [
+                "",
+                "> 警告：没有可关联的交易计划准入指标。可能原因包括当前 run_id 无交易计划表现、",
+                "> strategy_names / strategy_versions 无法映射到候选版本，或没有买入类 action。",
+                "> 准入结论不完整，不建议实盘。",
+            ]
+        )
 
     lines.extend(["", "## 三、策略准入总表", ""])
     if admission.empty:
@@ -71,14 +80,26 @@ def generate_strategy_admission_report(
     else:
         lines.extend(_markdown_table(candidates, ADMISSION_TABLE_COLUMNS + ["admission_reason"]))
 
-    lines.extend(["", "## 五、需要继续研究的策略版本", ""])
+    lines.extend(["", "## 五、Top candidates by admission_score", ""])
+    top_score = _top_by(admission, "admission_score")
+    lines.extend(_markdown_table(top_score, ADMISSION_TABLE_COLUMNS) if not top_score.empty else ["暂无候选。"])
+
+    lines.extend(["", "## 六、Top candidates by trade_plan_avg_return", ""])
+    top_return = _top_by(admission, "trade_plan_avg_return")
+    lines.extend(
+        _markdown_table(top_return, ADMISSION_TABLE_COLUMNS + ["trade_plan_avg_drawdown"])
+        if not top_return.empty
+        else ["暂无可用的交易计划收益指标。"]
+    )
+
+    lines.extend(["", "## 七、需要继续研究的策略版本", ""])
     research = _filter_recommendation(admission, ["continue_research", "observe_more"])
     if research.empty:
         lines.append("当前没有需要继续研究的策略版本。")
     else:
         lines.extend(_markdown_table(research, ADMISSION_TABLE_COLUMNS + ["admission_reason"]))
 
-    lines.extend(["", "## 六、不建议启用的策略版本", ""])
+    lines.extend(["", "## 八、不建议启用的策略版本", ""])
     rejected = _filter_recommendation(admission, ["do_not_enable"])
     if rejected.empty:
         lines.append("当前没有明确不建议启用的策略版本。")
@@ -92,7 +113,7 @@ def generate_strategy_admission_report(
     lines.extend(
         [
             "",
-            "## 七、风险提示",
+            "## 九、风险提示",
             "",
             "- 策略准入结果依赖历史数据和当前规则，可能存在样本偏差；",
             "- 观察候选不等于实盘启用；",
@@ -123,7 +144,19 @@ def _summary_lines(admission: pd.DataFrame) -> list[str]:
         f"- insufficient_samples 数量：{int((status == 'insufficient_samples').sum())}",
         f"- oos_failed 数量：{int((status == 'oos_failed').sum())}",
         f"- risk_rejected 数量：{int((status == 'risk_rejected').sum())}",
+        f"- trade_plan_win_rate 非空数量：{int(_column(admission, 'trade_plan_win_rate').notna().sum())}",
     ]
+
+
+def _top_by(admission: pd.DataFrame, column: str, limit: int = 10) -> pd.DataFrame:
+    if admission.empty or column not in admission.columns:
+        return pd.DataFrame()
+    values = pd.to_numeric(admission[column], errors="coerce")
+    if values.notna().sum() == 0:
+        return pd.DataFrame()
+    return admission.loc[values.notna()].assign(_rank_value=values[values.notna()]).sort_values(
+        "_rank_value", ascending=False
+    ).head(limit).drop(columns=["_rank_value"])
 
 
 def _filter_recommendation(admission: pd.DataFrame, recommendations: list[str]) -> pd.DataFrame:

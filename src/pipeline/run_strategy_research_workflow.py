@@ -213,6 +213,14 @@ def _run_parameter_search_streaming(**kwargs):
     return run_parameter_search(**kwargs)
 
 
+def _run_trade_plan_backtest_streaming(**kwargs):
+    """Use chunked result persistence and strategy holding grids in production."""
+    if getattr(run_trade_plan_backtest, "__module__", "") == "src.pipeline.backtest_trade_plans":
+        kwargs["materialize_results"] = False
+        kwargs["holding_days_mode"] = "strategy_grid"
+    return run_trade_plan_backtest(**kwargs)
+
+
 def run_strategy_research_workflow(
     db_path: str | None = None,
     output_dir: str = "reports",
@@ -357,7 +365,7 @@ def run_strategy_research_workflow(
         "run_trade_plan_backtest",
         parallel_enabled=parallel_enabled,
         requested_workers=resolved_workers,
-        serial_runner=lambda: run_trade_plan_backtest(
+        serial_runner=lambda: _run_trade_plan_backtest_streaming(
             db_path=resolved_db_path,
             start_date=train_start_date,
             end_date=train_end_date,

@@ -4,7 +4,11 @@ import re
 import duckdb
 import pandas as pd
 
-from src.backtest.trade_plan_backtester import BACKTEST_RESULT_COLUMNS, PERFORMANCE_COLUMNS as TRADE_PLAN_BACKTEST_PERFORMANCE_COLUMNS
+from src.backtest.trade_plan_backtester import (
+    BACKTEST_RESULT_COLUMNS,
+    DEFAULT_MAX_HOLDING_DAYS,
+    PERFORMANCE_COLUMNS as TRADE_PLAN_BACKTEST_PERFORMANCE_COLUMNS,
+)
 from src.research.factor_diagnostics import FACTOR_DIAGNOSTIC_COLUMNS
 from src.research.strategy_admission import STRATEGY_ADMISSION_COLUMNS
 from src.trading.actual_trades import ACTUAL_TRADE_COLUMNS, normalize_actual_trades
@@ -17,6 +21,12 @@ from src.strategy.trade_plan_generator import TRADE_PLAN_COLUMNS
 
 
 TRADE_CALENDAR_COLUMNS = ["trade_date", "exchange", "is_open", "pretrade_date"]
+
+
+def _run_id_join_condition(table_name: str, incoming_name: str, incoming_has_run_id: bool) -> str:
+    if incoming_has_run_id:
+        return f"{table_name}.run_id IS NOT DISTINCT FROM {incoming_name}.run_id"
+    return f"{table_name}.run_id IS NULL"
 DAILY_BASIC_COLUMNS = [
     "trade_date",
     "code",
@@ -1492,7 +1502,15 @@ class StockAgentStore:
                     USING incoming_walk_forward_validation
                     WHERE walk_forward_validation.strategy_name = incoming_walk_forward_validation.strategy_name
                       AND walk_forward_validation.strategy_version = incoming_walk_forward_validation.strategy_version
+                      AND {run_condition}
                     """
+                    .format(
+                        run_condition=_run_id_join_condition(
+                            "walk_forward_validation",
+                            "incoming_walk_forward_validation",
+                            "run_id" in columns,
+                        )
+                    )
                 )
                 con.execute(
                     """
@@ -1561,11 +1579,12 @@ class StockAgentStore:
             con.execute("BEGIN TRANSACTION")
             try:
                 con.execute(
-                    """
+                    f"""
                     DELETE FROM strategy_admission
                     USING incoming_strategy_admission
                     WHERE strategy_admission.strategy_name = incoming_strategy_admission.strategy_name
                       AND strategy_admission.strategy_version = incoming_strategy_admission.strategy_version
+                      AND {_run_id_join_condition('strategy_admission', 'incoming_strategy_admission', 'run_id' in columns)}
                     """
                 )
                 con.execute(
@@ -1638,6 +1657,7 @@ class StockAgentStore:
                     USING {incoming_name}
                     WHERE {table_name}.strategy_name = {incoming_name}.strategy_name
                       AND {table_name}.strategy_version = {incoming_name}.strategy_version
+                      AND {_run_id_join_condition(table_name, incoming_name, 'run_id' in columns)}
                     """
                 )
                 con.execute(
@@ -1737,6 +1757,7 @@ class StockAgentStore:
                       AND {table_name}.code = {incoming_name}.code
                       AND {table_name}.strategy_name = {incoming_name}.strategy_name
                       AND {table_name}.strategy_version = {incoming_name}.strategy_version
+                      AND {_run_id_join_condition(table_name, incoming_name, 'run_id' in columns)}
                     """
                 )
                 con.execute(
@@ -1834,6 +1855,7 @@ class StockAgentStore:
                     USING {incoming_name}
                     WHERE {table_name}.strategy_name = {incoming_name}.strategy_name
                       AND {table_name}.strategy_version = {incoming_name}.strategy_version
+                      AND {_run_id_join_condition(table_name, incoming_name, 'run_id' in columns)}
                     """
                 )
                 con.execute(
@@ -2007,13 +2029,14 @@ class StockAgentStore:
             con.execute("BEGIN TRANSACTION")
             try:
                 con.execute(
-                    """
+                    f"""
                     DELETE FROM historical_trade_plans
                     USING incoming_historical_trade_plans
                     WHERE historical_trade_plans.trade_date = incoming_historical_trade_plans.trade_date
                       AND historical_trade_plans.code = incoming_historical_trade_plans.code
                       AND historical_trade_plans.strategy_names = incoming_historical_trade_plans.strategy_names
                       AND historical_trade_plans.strategy_versions = incoming_historical_trade_plans.strategy_versions
+                      AND {_run_id_join_condition('historical_trade_plans', 'incoming_historical_trade_plans', 'run_id' in columns)}
                     """
                 )
                 con.execute(
@@ -2059,10 +2082,13 @@ class StockAgentStore:
         self._ensure_parent_dir()
         columns = BACKTEST_RESULT_COLUMNS + (["run_id"] if "run_id" in df.columns else [])
         normalized = self._normalize_dataframe(df, columns)
+        normalized["max_holding_days"] = pd.to_numeric(
+            normalized["max_holding_days"], errors="coerce"
+        ).fillna(DEFAULT_MAX_HOLDING_DAYS).astype(int)
         for column in ["plan_date", "code", "strategy_names", "strategy_versions"]:
             normalized[column] = normalized[column].fillna("").astype(str)
         normalized = normalized.drop_duplicates(
-            subset=["plan_date", "code", "strategy_names", "strategy_versions"],
+            subset=["plan_date", "code", "strategy_names", "strategy_versions", "max_holding_days"],
             keep="last",
         )
 
@@ -2072,13 +2098,15 @@ class StockAgentStore:
             con.execute("BEGIN TRANSACTION")
             try:
                 con.execute(
-                    """
+                    f"""
                     DELETE FROM trade_plan_backtest_results
                     USING incoming_trade_plan_backtest_results
                     WHERE trade_plan_backtest_results.plan_date = incoming_trade_plan_backtest_results.plan_date
                       AND trade_plan_backtest_results.code = incoming_trade_plan_backtest_results.code
                       AND trade_plan_backtest_results.strategy_names = incoming_trade_plan_backtest_results.strategy_names
                       AND trade_plan_backtest_results.strategy_versions = incoming_trade_plan_backtest_results.strategy_versions
+                      AND trade_plan_backtest_results.max_holding_days = incoming_trade_plan_backtest_results.max_holding_days
+                      AND {_run_id_join_condition('trade_plan_backtest_results', 'incoming_trade_plan_backtest_results', 'run_id' in columns)}
                     """
                 )
                 con.execute(
@@ -2122,8 +2150,11 @@ class StockAgentStore:
         normalized = self._normalize_dataframe(df, columns)
         for column in ["strategy_names", "strategy_versions", "action"]:
             normalized[column] = normalized[column].fillna("").astype(str)
+        normalized["max_holding_days"] = pd.to_numeric(
+            normalized["max_holding_days"], errors="coerce"
+        ).fillna(DEFAULT_MAX_HOLDING_DAYS).astype(int)
         normalized = normalized.drop_duplicates(
-            subset=["strategy_names", "strategy_versions", "action"],
+            subset=["strategy_names", "strategy_versions", "action", "max_holding_days"],
             keep="last",
         )
 
@@ -2133,12 +2164,14 @@ class StockAgentStore:
             con.execute("BEGIN TRANSACTION")
             try:
                 con.execute(
-                    """
+                    f"""
                     DELETE FROM trade_plan_backtest_performance
                     USING incoming_trade_plan_backtest_performance
                     WHERE trade_plan_backtest_performance.strategy_names = incoming_trade_plan_backtest_performance.strategy_names
                       AND trade_plan_backtest_performance.strategy_versions = incoming_trade_plan_backtest_performance.strategy_versions
                       AND trade_plan_backtest_performance.action = incoming_trade_plan_backtest_performance.action
+                      AND trade_plan_backtest_performance.max_holding_days = incoming_trade_plan_backtest_performance.max_holding_days
+                      AND {_run_id_join_condition('trade_plan_backtest_performance', 'incoming_trade_plan_backtest_performance', 'run_id' in columns)}
                     """
                 )
                 con.execute(
@@ -2175,6 +2208,68 @@ class StockAgentStore:
                 """,
                 params,
             ).fetchdf()
+
+    def aggregate_trade_plan_backtest_performance(self, run_id: str) -> pd.DataFrame:
+        """Aggregate persisted result rows in DuckDB without materializing the detail table."""
+        self._ensure_parent_dir()
+        with self._connect() as con:
+            self._create_tables(con)
+            return con.execute(
+                """
+                SELECT
+                    strategy_names,
+                    strategy_versions,
+                    action,
+                    max_holding_days,
+                    count(*)::BIGINT AS plan_count,
+                    count(*) FILTER (WHERE coalesce(is_triggered, false))::BIGINT AS triggered_count,
+                    count(*) FILTER (WHERE coalesce(is_valid, false))::BIGINT AS valid_count,
+                    count(*) FILTER (WHERE coalesce(is_triggered, false))::DOUBLE / nullif(count(*), 0)
+                        AS trigger_rate,
+                    avg(CASE WHEN coalesce(is_valid, false) THEN (return_pct > 0)::INTEGER END)
+                        AS win_rate,
+                    avg(return_pct) FILTER (WHERE coalesce(is_valid, false)) AS avg_return,
+                    median(return_pct) FILTER (WHERE coalesce(is_valid, false)) AS median_return,
+                    avg(max_drawdown) FILTER (WHERE coalesce(is_valid, false)) AS avg_max_drawdown,
+                    avg(max_favorable) FILTER (WHERE coalesce(is_valid, false)) AS avg_max_favorable,
+                    avg(CASE WHEN coalesce(is_valid, false) THEN (exit_reason = 'stop_loss')::INTEGER END)
+                        AS stop_loss_rate,
+                    avg(CASE WHEN coalesce(is_valid, false)
+                        THEN (exit_reason IN ('take_profit_1', 'take_profit_2'))::INTEGER END)
+                        AS take_profit_rate,
+                    avg(CASE WHEN coalesce(is_valid, false) THEN (exit_reason = 'time_exit')::INTEGER END)
+                        AS time_exit_rate,
+                    run_id
+                FROM trade_plan_backtest_results
+                WHERE run_id = ?
+                GROUP BY strategy_names, strategy_versions, action, max_holding_days, run_id
+                ORDER BY strategy_names, strategy_versions, action, max_holding_days
+                """,
+                [run_id],
+            ).fetchdf()
+
+    def delete_run_rows(self, run_id: str, table_names: list[str]) -> None:
+        """Delete only explicitly selected research outputs for one run."""
+        allowed = {
+            "historical_trade_plans",
+            "trade_plan_backtest_results",
+            "trade_plan_backtest_performance",
+            "strategy_admission",
+        }
+        invalid = set(table_names) - allowed
+        if invalid:
+            raise ValueError(f"unsupported run-scoped tables: {sorted(invalid)}")
+        self._ensure_parent_dir()
+        with self._connect() as con:
+            self._create_tables(con)
+            con.execute("BEGIN TRANSACTION")
+            try:
+                for table_name in table_names:
+                    con.execute(f"DELETE FROM {table_name} WHERE run_id = ?", [run_id])
+                con.execute("COMMIT")
+            except Exception:
+                con.execute("ROLLBACK")
+                raise
 
     def save_actual_trades(self, df: pd.DataFrame) -> None:
         self._ensure_parent_dir()
@@ -3427,8 +3522,7 @@ class StockAgentStore:
                 admission_score DOUBLE,
                 admission_status VARCHAR,
                 admission_recommendation VARCHAR,
-                admission_reason VARCHAR,
-                PRIMARY KEY (strategy_name, strategy_version)
+                admission_reason VARCHAR
             )
             """
         )
@@ -3526,14 +3620,14 @@ class StockAgentStore:
                 exit_price DOUBLE,
                 exit_reason VARCHAR,
                 holding_days BIGINT,
+                max_holding_days BIGINT,
                 return_pct DOUBLE,
                 max_drawdown DOUBLE,
                 max_favorable DOUBLE,
                 is_triggered BOOLEAN,
                 is_valid BOOLEAN,
                 invalid_reason VARCHAR,
-                backtest_comment VARCHAR,
-                PRIMARY KEY (plan_date, code, strategy_names, strategy_versions)
+                backtest_comment VARCHAR
             )
             """
         )
@@ -3543,6 +3637,7 @@ class StockAgentStore:
                 strategy_names VARCHAR,
                 strategy_versions VARCHAR,
                 action VARCHAR,
+                max_holding_days BIGINT,
                 plan_count BIGINT,
                 triggered_count BIGINT,
                 valid_count BIGINT,
@@ -3554,8 +3649,7 @@ class StockAgentStore:
                 avg_max_favorable DOUBLE,
                 stop_loss_rate DOUBLE,
                 take_profit_rate DOUBLE,
-                time_exit_rate DOUBLE,
-                PRIMARY KEY (strategy_names, strategy_versions, action)
+                time_exit_rate DOUBLE
             )
             """
         )
@@ -3572,6 +3666,37 @@ class StockAgentStore:
             "strategy_version_performance",
         ]:
             StockAgentStore._ensure_columns(con, table_name, {"run_id": "VARCHAR"})
+        StockAgentStore._ensure_columns(
+            con,
+            "trade_plan_backtest_results",
+            {"max_holding_days": "BIGINT"},
+        )
+        StockAgentStore._ensure_columns(
+            con,
+            "trade_plan_backtest_performance",
+            {"max_holding_days": "BIGINT"},
+        )
+        con.execute(
+            f"UPDATE trade_plan_backtest_results SET max_holding_days = {DEFAULT_MAX_HOLDING_DAYS} "
+            "WHERE max_holding_days IS NULL"
+        )
+        con.execute(
+            f"UPDATE trade_plan_backtest_performance SET max_holding_days = {DEFAULT_MAX_HOLDING_DAYS} "
+            "WHERE max_holding_days IS NULL"
+        )
+        for table_name in [
+            "strategy_version_evaluation",
+            "parameter_search_results",
+            "walk_forward_validation",
+            "historical_trade_plans",
+            "parameter_search_performance",
+            "parameter_search_backtest_results",
+            "strategy_version_performance",
+            "trade_plan_backtest_results",
+            "trade_plan_backtest_performance",
+            "strategy_admission",
+        ]:
+            StockAgentStore._ensure_unconstrained_research_table(con, table_name)
         con.execute(
             """
             CREATE TABLE IF NOT EXISTS actual_trades (
@@ -3899,6 +4024,18 @@ class StockAgentStore:
         for column_name, column_type in columns.items():
             if column_name not in existing:
                 con.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}")
+
+    @staticmethod
+    def _ensure_unconstrained_research_table(con: duckdb.DuckDBPyConnection, table_name: str) -> None:
+        """Remove legacy primary keys so run_id/holding-day dimensions can coexist."""
+        table_info = con.execute(f"PRAGMA table_info('{table_name}')").fetchall()
+        if not any(row[5] > 0 for row in table_info):
+            return
+        migration_table = f"{table_name}__run_holding_migration"
+        con.execute(f"DROP TABLE IF EXISTS {migration_table}")
+        con.execute(f"CREATE TABLE {migration_table} AS SELECT * FROM {table_name}")
+        con.execute(f"DROP TABLE {table_name}")
+        con.execute(f"ALTER TABLE {migration_table} RENAME TO {table_name}")
 
     @staticmethod
     def _ensure_strategy_signals_schema(con: duckdb.DuckDBPyConnection) -> None:

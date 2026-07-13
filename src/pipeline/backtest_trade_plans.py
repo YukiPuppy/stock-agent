@@ -8,7 +8,12 @@ from collections.abc import Sequence
 import pandas as pd
 
 from src.backtest.historical_trade_plan_builder import build_historical_trade_plans
-from src.backtest.trade_plan_backtester import backtest_trade_plans, evaluate_trade_plan_backtest
+from src.backtest.trade_plan_backtester import (
+    DEFAULT_MAX_HOLDING_DAYS,
+    backtest_trade_plans,
+    evaluate_trade_plan_backtest,
+    expand_trade_plans_for_holding_days,
+)
 from src.config.settings import DB_PATH
 from src.database.duckdb_store import StockAgentStore
 from src.pipeline.memory import collect_memory, log_memory
@@ -29,11 +34,13 @@ def run_trade_plan_backtest(
     top_n: int = 20,
     max_plan_items: int = 5,
     min_amount_ma5: float = 0.0,
-    max_holding_days: int = 5,
+    max_holding_days: int = DEFAULT_MAX_HOLDING_DAYS,
+    holding_days_mode: str = "fixed",
     strategy_signals: pd.DataFrame | None = None,
     strategy_evaluation: pd.DataFrame | None = None,
     run_id: str | None = None,
     return_diagnostics: bool = False,
+    materialize_results: bool = True,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame] | tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, dict[str, int]]:
     resolved_db_path = _resolve_db_path(db_path)
     store = StockAgentStore(resolved_db_path)
@@ -79,7 +86,10 @@ def run_trade_plan_backtest(
         strategy_signals = _normalize_current_strategy_signals(strategy_signals)
 
     log_memory("trade_plan_backtest", "before_plan_chunks")
+    if not materialize_results and run_id is None:
+        raise ValueError("run_id is required when materialize_results=False")
     plan_frames: list[pd.DataFrame] = []
+    persisted_plan_count = 0
     diagnostics = {"historical_signals": 0, "historical_candidates": 0, "historical_trade_plans": 0}
     trade_dates = persisted_trade_dates or (
         strategy_signals["trade_date"].dropna().astype(str).drop_duplicates().sort_values().tolist()
@@ -109,20 +119,38 @@ def run_trade_plan_backtest(
         if run_id is not None:
             chunk_plans = chunk_plans.assign(run_id=run_id)
         store.save_historical_trade_plans(chunk_plans)
-        plan_frames.append(chunk_plans)
+        persisted_plan_count += len(chunk_plans)
+        if materialize_results:
+            plan_frames.append(chunk_plans)
         for key in diagnostics:
             diagnostics[key] += int(chunk_diagnostics.get(key, 0))
         del chunk_signals, daily_factors, chunk_plans
         gc.collect()
         log_memory("trade_plan_backtest", f"plan_chunk_written_{offset // _DATE_CHUNK_SIZE + 1}")
-    historical_trade_plans = pd.concat(plan_frames, ignore_index=True) if plan_frames else pd.DataFrame()
+    if materialize_results:
+        historical_trade_plans = pd.concat(plan_frames, ignore_index=True) if plan_frames else pd.DataFrame()
+    else:
+        historical_trade_plans = pd.DataFrame()
+        historical_trade_plans.attrs["row_count"] = persisted_plan_count
     del plan_frames, strategy_signals, persisted_trade_dates
     collect_memory("trade_plan_backtest:plans")
 
     result_frames: list[pd.DataFrame] = []
-    for offset in range(0, len(historical_trade_plans), _PLAN_CHUNK_SIZE):
-        plan_chunk = historical_trade_plans.iloc[offset : offset + _PLAN_CHUNK_SIZE].copy()
-        daily_bars = _load_daily_bars_for_plans(store, plan_chunk, end_date, max_holding_days)
+    persisted_result_count = 0
+    triggered_trade_count = 0
+    plan_total = len(historical_trade_plans) if materialize_results else persisted_plan_count
+    for offset in range(0, plan_total, _PLAN_CHUNK_SIZE):
+        if materialize_results:
+            plan_chunk = historical_trade_plans.iloc[offset : offset + _PLAN_CHUNK_SIZE].copy()
+        else:
+            plan_chunk = _load_historical_plan_chunk(store, str(run_id), _PLAN_CHUNK_SIZE, offset)
+        plan_chunk = expand_trade_plans_for_holding_days(
+            plan_chunk,
+            mode=holding_days_mode,
+            max_holding_days=max_holding_days,
+        )
+        chunk_max_holding_days = int(plan_chunk["max_holding_days"].max()) if not plan_chunk.empty else max_holding_days
+        daily_bars = _load_daily_bars_for_plans(store, plan_chunk, end_date, chunk_max_holding_days)
         result_chunk = backtest_trade_plans(
             trade_plans=plan_chunk,
             daily_bars=daily_bars,
@@ -131,22 +159,27 @@ def run_trade_plan_backtest(
         if run_id is not None:
             result_chunk = result_chunk.assign(run_id=run_id)
         store.save_trade_plan_backtest_results(result_chunk)
-        result_frames.append(result_chunk)
+        persisted_result_count += len(result_chunk)
+        triggered_trade_count += int(result_chunk["is_triggered"].fillna(False).astype(bool).sum())
+        if materialize_results:
+            result_frames.append(result_chunk)
         del plan_chunk, daily_bars, result_chunk
         gc.collect()
         log_memory("trade_plan_backtest", f"backtest_chunk_written_{offset // _PLAN_CHUNK_SIZE + 1}")
-    backtest_results = pd.concat(result_frames, ignore_index=True) if result_frames else pd.DataFrame()
+    if materialize_results:
+        backtest_results = pd.concat(result_frames, ignore_index=True) if result_frames else pd.DataFrame()
+        performance = evaluate_trade_plan_backtest(backtest_results)
+    else:
+        backtest_results = pd.DataFrame()
+        backtest_results.attrs["row_count"] = persisted_result_count
+        performance = store.aggregate_trade_plan_backtest_performance(str(run_id))
     del result_frames
-    performance = evaluate_trade_plan_backtest(backtest_results)
     if run_id is not None:
         backtest_results = backtest_results.assign(run_id=run_id)
-        performance = performance.assign(run_id=run_id)
+        if "run_id" not in performance.columns:
+            performance = performance.assign(run_id=run_id)
     store.save_trade_plan_backtest_performance(performance)
-    diagnostics["triggered_trades"] = (
-        int(backtest_results["is_triggered"].fillna(False).astype(bool).sum())
-        if "is_triggered" in backtest_results.columns
-        else 0
-    )
+    diagnostics["triggered_trades"] = triggered_trade_count
     print(
         "[historical_trade_plan_chain] "
         f"historical_signals={diagnostics['historical_signals']} "
@@ -195,6 +228,26 @@ def _load_daily_bars_for_plans(
         return result
 
 
+def _load_historical_plan_chunk(
+    store: StockAgentStore,
+    run_id: str,
+    limit: int,
+    offset: int,
+) -> pd.DataFrame:
+    with store._connect() as con:
+        store._create_tables(con)
+        return con.execute(
+            """
+            SELECT * EXCLUDE (run_id)
+            FROM historical_trade_plans
+            WHERE run_id = ?
+            ORDER BY trade_date, rank, code, strategy_names, strategy_versions
+            LIMIT ? OFFSET ?
+            """,
+            [run_id, limit, offset],
+        ).fetchdf()
+
+
 def _normalize_current_strategy_signals(strategy_signals: pd.DataFrame) -> pd.DataFrame:
     signals = strategy_signals.copy()
     if "trade_date" in signals.columns:
@@ -226,7 +279,8 @@ def _run_and_report(
     top_n: int = 20,
     max_plan_items: int = 5,
     min_amount_ma5: float = 0.0,
-    max_holding_days: int = 5,
+    max_holding_days: int = DEFAULT_MAX_HOLDING_DAYS,
+    holding_days_mode: str = "fixed",
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, dict[str, int]]:
     resolved_db_path = _resolve_db_path(db_path)
     store = StockAgentStore(resolved_db_path)
@@ -241,6 +295,7 @@ def _run_and_report(
         max_plan_items=max_plan_items,
         min_amount_ma5=min_amount_ma5,
         max_holding_days=max_holding_days,
+        holding_days_mode=holding_days_mode,
     )
     counts = {
         "strategy_signals": len(strategy_signals),
@@ -263,7 +318,13 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         default=0.0,
         help="Minimum amount_ma5 filter, in thousand yuan.",
     )
-    parser.add_argument("--max-holding-days", type=int, default=5)
+    parser.add_argument("--max-holding-days", type=int, default=DEFAULT_MAX_HOLDING_DAYS)
+    parser.add_argument(
+        "--holding-days-mode",
+        choices=["fixed", "strategy_grid"],
+        default="fixed",
+        help="Use one fixed holding period or the configured per-strategy secondary-validation grid.",
+    )
     return parser.parse_args(argv)
 
 
@@ -277,6 +338,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         max_plan_items=args.max_plan_items,
         min_amount_ma5=args.min_amount_ma5,
         max_holding_days=args.max_holding_days,
+        holding_days_mode=args.holding_days_mode,
     )
     print(f"strategy_signals 行数: {counts['strategy_signals']}")
     print(f"daily_factors 行数: {counts['daily_factors']}")

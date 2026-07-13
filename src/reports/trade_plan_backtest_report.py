@@ -10,6 +10,7 @@ PERFORMANCE_TABLE_COLUMNS = [
     "strategy_names",
     "strategy_versions",
     "action",
+    "max_holding_days",
     "plan_count",
     "trigger_rate",
     "win_rate",
@@ -26,6 +27,8 @@ DETAIL_COLUMNS = [
     "entry_price",
     "exit_price",
     "exit_reason",
+    "holding_days",
+    "max_holding_days",
     "return_pct",
     "max_drawdown",
     "max_favorable",
@@ -72,16 +75,60 @@ def generate_trade_plan_backtest_report(
     lines.extend(["", "## 三、策略版本表现"])
     lines.extend(_markdown_table(performance, PERFORMANCE_TABLE_COLUMNS) if not performance.empty else ["当前没有可用的策略版本表现。"])
 
-    lines.extend(["", "## 四、回测明细"])
+    lines.extend(["", "## 四、holding_days distribution by strategy"])
+    holding_distribution = _distribution(results, ["strategy_names", "holding_days"])
+    lines.extend(
+        _markdown_table(holding_distribution, ["strategy_names", "holding_days", "count"])
+        if not holding_distribution.empty
+        else ["当前没有持仓天数分布。"]
+    )
+
+    lines.extend(["", "## 五、exit_reason distribution by strategy"])
+    exit_distribution = _distribution(_valid_results(results), ["strategy_names", "exit_reason"])
+    lines.extend(
+        _markdown_table(exit_distribution, ["strategy_names", "exit_reason", "count"])
+        if not exit_distribution.empty
+        else ["当前没有退出原因分布。"]
+    )
+
+    lines.extend(["", "## 六、performance by max_holding_days"])
+    holding_performance = _performance_by_holding_days(results)
+    lines.extend(
+        _markdown_table(
+            holding_performance,
+            ["max_holding_days", "plan_count", "valid_count", "win_rate", "avg_return", "avg_max_drawdown"],
+        )
+        if not holding_performance.empty
+        else ["当前没有按最大持仓天数汇总的表现。"]
+    )
+
+    lines.extend(["", "## 七、performance by strategy_name / strategy_version / max_holding_days"])
+    strategy_holding_columns = [
+        "strategy_names",
+        "strategy_versions",
+        "max_holding_days",
+        "plan_count",
+        "valid_count",
+        "win_rate",
+        "avg_return",
+        "avg_max_drawdown",
+    ]
+    lines.extend(
+        _markdown_table(performance, strategy_holding_columns)
+        if not performance.empty
+        else ["当前没有策略版本与持仓周期交叉表现。"]
+    )
+
+    lines.extend(["", "## 八、回测明细"])
     lines.extend(_markdown_table(results.head(50), DETAIL_COLUMNS) if not results.empty else ["当前没有可用的回测明细。"])
 
-    lines.extend(["", "## 五、问题观察"])
+    lines.extend(["", "## 九、问题观察"])
     lines.extend(_observation_lines(results, performance))
 
     lines.extend(
         [
             "",
-            "## 六、风险提示",
+            "## 十、风险提示",
             "- 规则回测结果不代表未来收益；",
             "- 当前回测仍可能高估实际可成交性；",
             "- 涨跌停、滑点、成交量约束后续仍需补充；",
@@ -163,6 +210,33 @@ def _numeric_series(df: pd.DataFrame, column: str) -> pd.Series:
     if df.empty or column not in df.columns:
         return pd.Series(dtype=float)
     return pd.to_numeric(df[column], errors="coerce").dropna()
+
+
+def _distribution(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
+    if df.empty or any(column not in df.columns for column in columns):
+        return pd.DataFrame(columns=columns + ["count"])
+    return df.groupby(columns, dropna=False).size().rename("count").reset_index()
+
+
+def _performance_by_holding_days(results: pd.DataFrame) -> pd.DataFrame:
+    if results.empty or "max_holding_days" not in results.columns:
+        return pd.DataFrame()
+    rows = []
+    for max_holding_days, group in results.groupby("max_holding_days", dropna=False, sort=True):
+        valid = _valid_results(group)
+        returns = _numeric_series(valid, "return_pct")
+        drawdowns = _numeric_series(valid, "max_drawdown")
+        rows.append(
+            {
+                "max_holding_days": max_holding_days,
+                "plan_count": len(group),
+                "valid_count": len(valid),
+                "win_rate": float((returns > 0).mean()) if not returns.empty else None,
+                "avg_return": float(returns.mean()) if not returns.empty else None,
+                "avg_max_drawdown": float(drawdowns.mean()) if not drawdowns.empty else None,
+            }
+        )
+    return pd.DataFrame(rows)
 
 
 def _top_strategy(performance: pd.DataFrame, metric: str) -> str:

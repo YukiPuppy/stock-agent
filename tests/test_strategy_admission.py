@@ -1,6 +1,10 @@
 import pandas as pd
 
-from src.research.strategy_admission import build_active_strategy_candidate_config, build_strategy_admission
+from src.research.strategy_admission import (
+    build_active_strategy_candidate_config,
+    build_strategy_admission,
+    parse_strategy_dimension,
+)
 
 
 def _evaluation(recommendation="enable_observation", valid_count=40, score=45.0):
@@ -125,3 +129,65 @@ def test_build_strategy_admission_sorts_by_admission_score():
 
     assert result["admission_score"].tolist() == sorted(result["admission_score"], reverse=True)
     assert result.loc[0, "strategy_name"] == "breakout"
+
+
+def test_parse_strategy_dimension_supports_single_delimiters_json_and_bad_values():
+    assert parse_strategy_dimension("trend_pullback") == ["trend_pullback"]
+    assert parse_strategy_dimension("trend_pullback,breakout_volume") == ["trend_pullback", "breakout_volume"]
+    assert parse_strategy_dimension("trend_pullback|breakout_volume") == ["trend_pullback", "breakout_volume"]
+    assert parse_strategy_dimension("trend_pullback;breakout_volume+support_rebound") == [
+        "trend_pullback",
+        "breakout_volume",
+        "support_rebound",
+    ]
+    assert parse_strategy_dimension('["trend_pullback", "breakout_volume"]') == [
+        "trend_pullback",
+        "breakout_volume",
+    ]
+    assert parse_strategy_dimension(None) == []
+    assert parse_strategy_dimension(float("nan")) == []
+    assert parse_strategy_dimension("not-json[") == ["not-json["]
+
+
+def test_composite_trade_plan_performance_is_weighted_back_to_single_strategies():
+    evaluation = pd.DataFrame(
+        {
+            "strategy_name": ["trend_pullback", "breakout_volume"],
+            "strategy_version": ["v1", "v2"],
+            "valid_count": [40, 40],
+            "evaluation_score": [40.0, 40.0],
+            "recommendation": ["observe", "observe"],
+        }
+    )
+    performance = pd.DataFrame(
+        {
+            "strategy_names": ["trend_pullback,breakout_volume", "trend_pullback"],
+            "strategy_versions": ["v1,v2", "v1"],
+            "action": ["回踩低吸", "buy"],
+            "plan_count": [10, 30],
+            "triggered_count": [4, 15],
+            "valid_count": [4, 6],
+            "trigger_rate": [0.4, 0.5],
+            "win_rate": [0.5, 1.0],
+            "avg_return": [0.01, 0.03],
+            "avg_max_drawdown": [-0.04, -0.02],
+        }
+    )
+
+    result = build_strategy_admission(evaluation, None, None, performance).set_index("strategy_name")
+
+    trend = result.loc["trend_pullback"]
+    assert trend["trade_plan_valid_count"] == 10
+    assert trend["trade_plan_trigger_rate"] == (0.4 * 10 + 0.5 * 30) / 40
+    assert trend["trade_plan_win_rate"] == (0.5 * 4 + 1.0 * 6) / 10
+    assert trend["trade_plan_avg_return"] == (0.01 * 4 + 0.03 * 6) / 10
+    assert trend["trade_plan_avg_drawdown"] == (-0.04 * 4 + -0.02 * 6) / 10
+    assert result.loc["breakout_volume", "trade_plan_valid_count"] == 4
+
+
+def test_watch_only_trade_plan_rows_are_not_used_for_admission():
+    performance = _trade_plan().assign(action="仅观察", valid_count=100, win_rate=1.0)
+
+    result = build_strategy_admission(_evaluation(), None, _oos(), performance)
+
+    assert pd.isna(result.loc[0, "trade_plan_win_rate"])
